@@ -2,6 +2,10 @@
 
 Personal AI-native video editor for macOS, built for one user (Luke). Never public, so no auth, multi-user or telemetry.
 
+## Design
+
+The UI follows `DESIGN.md`: LukeOS's look (grey scale, Geist, Lucide, two meaningful colours), one size denser for a desktop editor. Blue means Claude's unreviewed changes; never use it for anything else.
+
 ## Current phase
 
 Planning. Don't scaffold the app or add dependencies unless asked. `docs/planning.md` is a snapshot of the living planning doc; the decisions table there is the source of truth.
@@ -12,7 +16,7 @@ Planning. Don't scaffold the app or add dependencies unless asked. `docs/plannin
 - **Slim.** Minimise RAM and disk. Prefer system frameworks and small native helpers over bundled runtimes. Electron is ruled out.
 - **Local.** Footage stays on the Mac. Third-party processing only where explicitly approved.
 - **Tauri** is the shell (decided). Recording is a separate native Swift helper so the editor UI can close while recording.
-- **UI** should feel like Final Cut: dense, solid, pro. Not a graphic-design showpiece. No infinite canvas (rejected).
+- **UI** should feel like Final Cut in layout and density, and like LukeOS in look (see `DESIGN.md`). Not a graphic-design showpiece. No infinite canvas (rejected).
 
 ## Project file format (planned)
 

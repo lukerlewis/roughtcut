@@ -27,6 +27,7 @@ A personal, AI-native video editor for macOS. Drop in a talking-head or screen-s
 ## Docs
 
 - [Planning doc](docs/planning.md) (snapshot; the living version is [on Claude](https://claude.ai/code/artifact/00bf2ea2-aca2-4ab8-9ef9-e3fbf388011b))
+- [Design system](DESIGN.md): LukeOS look, editor density
 - [UI mockups](https://claude.ai/artifact/Ju4AVzXTb8bi2Y8KBQUyg9)
 
 ## Roadmap
