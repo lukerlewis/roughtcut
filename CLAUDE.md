@@ -8,7 +8,9 @@ The UI follows `DESIGN.md`: LukeOS's look (grey scale, Geist, Lucide, two meanin
 
 ## Current phase
 
-Planning. Don't scaffold the app or add dependencies unless asked. `docs/planning.md` is a snapshot of the living planning doc; the decisions table there is the source of truth.
+Phase 0: the command-line rough cut in `roughcut/` (see `docs/phase0.md`). Don't scaffold the Tauri app or add dependencies unless asked. `docs/planning.md` is a snapshot of the living planning doc; the decisions table there is the source of truth.
+
+The Python package has no required dependencies; speech models are optional extras. Run `pytest` before pushing.
 
 ## Hard constraints
 

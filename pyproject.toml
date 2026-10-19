@@ -1,0 +1,26 @@
+[project]
+name = "roughcut"
+version = "0.1.0"
+description = "Phase 0: turn a raw talking-head or screen recording into a rough cut (FCPXML) with Claude."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# Apple Silicon transcription (the default on Luke's Mac).
+mlx = ["mlx-whisper"]
+# Cross-platform CPU transcription, used for tests and Intel Macs.
+cpu = ["faster-whisper"]
+dev = ["pytest"]
+
+[project.scripts]
+roughcut = "roughcut.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["roughcut"]
+
+[tool.setuptools.package-data]
+roughcut = ["styles/*.md"]
