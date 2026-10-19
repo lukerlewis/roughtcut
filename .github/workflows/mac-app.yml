@@ -1,0 +1,52 @@
+name: Mac app
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths: ["app/**", "roughcut/**", "tests/**", ".github/workflows/mac-app.yml"]
+  workflow_dispatch:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg espeak-ng
+      - run: pip install -e .[dev] numpy
+      - run: pytest -q
+
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - run: brew install ffmpeg
+      - run: npm ci
+      - run: npm test
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: npx tauri build --bundles app,dmg
+      - name: Zip the app
+        run: |
+          cd src-tauri/target/release/bundle/macos
+          ditto -c -k --keepParent Roughcut.app Roughcut.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Roughcut-mac
+          path: |
+            app/src-tauri/target/release/bundle/macos/Roughcut.zip
+            app/src-tauri/target/release/bundle/dmg/*.dmg
+          retention-days: 30
