@@ -104,13 +104,14 @@ def extract_audio(src: Path, dest: Path) -> Path:
     return dest
 
 
-def render_preview(src: Path, ranges: list[tuple[float, float]], dest: Path, height: int = 540) -> Path:
-    """A small H.264 preview of the cut, for watching it without Final Cut."""
+def render_preview(src: Path, ranges: list[tuple[float, float]], dest: Path, height: int = 1080) -> Path:
+    """An H.264 render of the cut, for watching it without Final Cut. Up to
+    1080p so text in screen recordings stays readable; never upscaled."""
     if not ranges:
         raise MediaError("Nothing kept, so there is nothing to render.")
     parts = []
     for i, (a, b) in enumerate(ranges):
-        parts.append(f"[0:v]trim={a:.4f}:{b:.4f},setpts=PTS-STARTPTS,scale=-2:{height}[v{i}];")
+        parts.append(f"[0:v]trim={a:.4f}:{b:.4f},setpts=PTS-STARTPTS,scale=-2:'min({height},ih)'[v{i}];")
         parts.append(f"[0:a]atrim={a:.4f}:{b:.4f},asetpts=PTS-STARTPTS[a{i}];")
     joined = "".join(f"[v{i}][a{i}]" for i in range(len(ranges)))
     graph = "".join(parts) + f"{joined}concat=n={len(ranges)}:v=1:a=1[v][a]"
@@ -119,7 +120,7 @@ def render_preview(src: Path, ranges: list[tuple[float, float]], dest: Path, hei
     try:
         _run([
             "ffmpeg", "-v", "error", "-y", "-i", str(src), "-filter_complex_script", str(script),
-            "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+            "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "aac", "-b:a", "128k", str(dest),
         ])
     finally:

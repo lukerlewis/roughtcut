@@ -7,7 +7,7 @@ Writes everything to a "<name> rough cut" folder next to the source:
   decisions.json    what was kept and cut, and why
   cut.fcpxml        open this in Final Cut Pro (File > Import > XML)
   report.md         what was cut, Claude's notes, and a test scorecard
-  preview.mp4       a small render of the cut, to watch without Final Cut
+  preview.mp4       a render of the cut (up to 1080p), to watch without Final Cut
 """
 
 from __future__ import annotations

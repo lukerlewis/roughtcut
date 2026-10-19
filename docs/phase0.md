@@ -11,7 +11,7 @@ The first step proves the core bet before any app exists: can Claude cut Luke's 
 3. Groups the words into short lines and flags fillers, long pauses, abandoned sentences and likely retakes.
 4. Sends the numbered words, the flags and the style guide to Claude through the `claude` CLI on Luke's plan (`claude -p`, Opus by default, no tools). Claude returns which spans of words to cut and why, so it can drop a false start without losing the good sentence before it.
 5. Builds frame-accurate clip ranges: pads each cut so words aren't clipped and closes up long pauses.
-6. Writes `cut.fcpxml` for Final Cut, a `report.md` of every cut with its reason, and a small `preview.mp4`.
+6. Writes `cut.fcpxml` for Final Cut, a `report.md` of every cut with its reason, and a `preview.mp4` of the cut (up to 1080p).
 
 Everything lands in a `recording rough cut` folder next to the source. The transcript is cached there, so rerunning (say with a tweaked style guide) skips straight to Claude.
 
