@@ -7,3 +7,8 @@ dist/
 *.m4a
 *.wav
 /proxies/
+__pycache__/
+*.egg-info/
+.venv/
+*.roughcut/
+.pytest_cache/

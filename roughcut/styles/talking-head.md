@@ -1,0 +1,7 @@
+- This is a talking-head or screen-share video for YouTube. Luke is the speaker.
+- Open on the first real line of content. Cut greetings, "okay so", throat-clearing and checks like "is this recording?" before it.
+- When a line is said more than once, keep the cleanest complete take, usually the last one. Cut the earlier attempts entirely.
+- Cut filler words (um, uh) and abandoned half-sentences.
+- Keep asides and jokes that are on topic; they're part of the voice.
+- Keep "so", "and" and "but" at the start of sentences unless they're stammered.
+- Cut anything after the real sign-off.
