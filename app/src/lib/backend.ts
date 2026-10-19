@@ -29,10 +29,10 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
   return invoke<T>(cmd, args);
 }
 
+/** The player's URL for a recording, served by the app on 127.0.0.1. */
 export async function videoUrl(path: string): Promise<string> {
   if (!inApp) return path;
-  const { convertFileSrc } = await import("@tauri-apps/api/core");
-  return convertFileSrc(path);
+  return invoke("video_url", { path });
 }
 
 export async function chooseRecording(): Promise<string | null> {
@@ -95,6 +95,79 @@ export async function exportCut(source: string, ranges: [number, number][], dest
     return;
   }
   return invoke("export", { source, ranges, dest });
+}
+
+// --- Claude in the sidebar -------------------------------------------------
+
+/** One line of `claude -p --output-format stream-json`. */
+export type ClaudeEvent = Record<string, any>;
+
+export interface ChatMessage {
+  role: "you" | "claude" | "action" | "error";
+  text: string;
+  tool?: string;
+  input?: Record<string, any>;
+}
+
+export interface Chat {
+  session: string | null;
+  messages: ChatMessage[];
+}
+
+export async function loadChat(folder: string): Promise<Chat | null> {
+  if (!inApp) {
+    const saved = localStorage.getItem("roughcut-chat");
+    return saved ? JSON.parse(saved) : null;
+  }
+  return invoke("load_chat", { folder });
+}
+
+export async function saveChat(folder: string, chat: Chat): Promise<void> {
+  if (!inApp) {
+    localStorage.setItem("roughcut-chat", JSON.stringify(chat));
+    return;
+  }
+  return invoke("save_chat", { folder, chat });
+}
+
+/** One turn: Claude's stream arrives through onClaudeEvent until this resolves. */
+export async function askClaude(folder: string, recording: string, duration: number, prompt: string, resume: string | null) {
+  if (!inApp) return mockClaude(prompt);
+  return invoke<void>("ask_claude", { folder, recording, duration, prompt, resume });
+}
+
+export async function stopClaude(): Promise<void> {
+  if (inApp) await invoke("stop_claude");
+}
+
+const mockListeners = new Set<(e: ClaudeEvent) => void>();
+
+export async function onClaudeEvent(fn: (e: ClaudeEvent) => void): Promise<() => void> {
+  if (!inApp) {
+    mockListeners.add(fn);
+    return () => mockListeners.delete(fn);
+  }
+  return listen<ClaudeEvent>("claude-event", fn);
+}
+
+/** For working on the UI in a browser: replays /fixtures/claude.json, a list
+ *  of stream events, applying any cut_words calls to the saved edits. */
+async function mockClaude(_prompt: string) {
+  const events: ClaudeEvent[] = await fetch("/fixtures/claude.json").then((r) => r.json());
+  for (const e of events) {
+    await new Promise((r) => setTimeout(r, e.type === "assistant" ? 700 : 150));
+    for (const c of e.message?.content ?? []) {
+      if (c.type === "tool_use" && c.name === "mcp__roughcut__cut_words") {
+        const edits = JSON.parse(localStorage.getItem("roughcut-edits") ?? "null");
+        if (edits) {
+          edits.agent.push({ first: c.input.from, last: c.input.to, reason: c.input.reason, status: "pending" });
+          edits.log.push({ at: new Date().toISOString(), by: "agent", op: "cut", first: c.input.from, last: c.input.to, note: c.input.reason });
+          localStorage.setItem("roughcut-edits", JSON.stringify(edits));
+        }
+      }
+    }
+    mockListeners.forEach((fn) => fn(e));
+  }
 }
 
 /** A recording the app was opened with, if any. */

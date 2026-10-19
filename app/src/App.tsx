@@ -1,6 +1,7 @@
 import { Download, FolderOpen, Pause, Play, SkipBack } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
+import { Chat } from "./components/Chat";
 import { Timeline } from "./components/Timeline";
 import { Transcript, type Selection } from "./components/Transcript";
 import * as backend from "./lib/backend";
@@ -48,6 +49,9 @@ export default function App() {
   const [state, setState] = useState<PlayerState>({ playing: false, time: 0, source: 0 });
   const [exporting, setExporting] = useState<{ progress: number; dest: string; done: boolean; error?: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [tab, setTab] = useState<"changes" | "chat">("changes");
+  const [chat, setChat] = useState<backend.Chat>({ session: null, messages: [] });
+  const [asking, setAsking] = useState(false);
   const videoA = useRef<HTMLVideoElement>(null);
   const videoB = useRef<HTMLVideoElement>(null);
   const player = useRef<CutPlayer | null>(null);
@@ -68,6 +72,7 @@ export default function App() {
       const [loaded, info, url] = await Promise.all([backend.loadCut(opened.folder), backend.probe(path), backend.videoUrl(path)]);
       history.current = { undo: [], redo: [] };
       setEdits(loaded.edits ?? fromDecisions(loaded.decisions));
+      setChat((await backend.loadChat(opened.folder).catch(() => null)) ?? { session: null, messages: [] });
       setProject({ source: path, folder: opened.folder, url, info, words: loaded.words, summary: loaded.decisions.summary ?? "" });
       setPhase({ kind: "ready" });
       backend.waveform(path, opened.folder).then(setPeaks, () => setPeaks(null));
@@ -150,6 +155,55 @@ export default function App() {
     }
     return joins;
   }, [edits, ranges, words]);
+
+  // --- Claude in the sidebar ----------------------------------------------
+
+  const projectRef = useRef(project);
+  projectRef.current = project;
+
+  // Claude's stream: its words, what it did, and a reload of the edit after
+  // each change it makes (as one undoable step).
+  useEffect(() => {
+    const off = backend.onClaudeEvent((e) => {
+      const add = (...m: backend.ChatMessage[]) => setChat((c) => ({ ...c, messages: [...c.messages, ...m] }));
+      if (e.session_id) setChat((c) => (c.session === e.session_id ? c : { ...c, session: e.session_id }));
+      if (e.type === "assistant") {
+        for (const block of e.message?.content ?? []) {
+          if (block.type === "text" && block.text.trim()) add({ role: "claude", text: block.text.trim() });
+          if (block.type === "tool_use" && String(block.name).startsWith("mcp__roughcut__"))
+            add({ role: "action", text: "", tool: block.name.replace("mcp__roughcut__", ""), input: block.input });
+        }
+      } else if (e.type === "user") {
+        const changed = (e.message?.content ?? []).some((b: any) => b.type === "tool_result" && !b.is_error);
+        const folder = projectRef.current?.folder;
+        if (changed && folder)
+          backend.loadCut(folder).then((l) => l.edits && change((prev) => (JSON.stringify(prev) === JSON.stringify(l.edits) ? prev : l.edits!)));
+      } else if (e.type === "result" && e.is_error) add({ role: "error", text: String(e.result ?? "Claude stopped.") });
+    });
+    return () => {
+      off.then((f) => f());
+    };
+  }, [change]);
+
+  const ask = async (text: string) => {
+    if (!project || !edits || asking) return;
+    player.current?.pause();
+    setAsking(true);
+    const before = { ...chat, messages: [...chat.messages, { role: "you" as const, text }] };
+    setChat(before);
+    try {
+      await backend.saveEdits(project.folder, edits); // so Claude starts from what's on screen
+      await backend.askClaude(project.folder, name(project.source), project.info.duration, text, chat.session);
+    } catch (e) {
+      setChat((c) => ({ ...c, messages: [...c.messages, { role: "error", text: String(e) }] }));
+    } finally {
+      setAsking(false);
+      setChat((c) => {
+        backend.saveChat(project.folder, c).catch(console.error);
+        return c;
+      });
+    }
+  };
 
   // --- Playback ------------------------------------------------------------
 
@@ -321,31 +375,49 @@ export default function App() {
         </div>
 
         <div className="panel">
-          <div className="panel-head">
-            Claude's cuts
-            <span className="meta">{pending ? `${pending} to review` : "All reviewed"}</span>
+          <div className="panel-head tabs">
+            <button className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}>
+              Changes {pending > 0 && <span className="count">{pending}</span>}
+            </button>
+            <button className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}>
+              Ask Claude {asking && <span className="pulse" />}
+            </button>
             <span className="spacer" />
-            {pending > 0 && (
+            {tab === "changes" && pending > 0 && (
               <button className="btn" onClick={() => change(acceptAll)}>
                 Keep all
               </button>
             )}
           </div>
-          <Changes
-            words={words}
-            cuts={edits.agent}
-            summary={project.summary}
-            focus={focus}
-            onFocus={(i) => {
-              setFocus(i);
-              const c = edits.agent[i];
-              player.current?.pause();
-              player.current?.seekSource(Math.max(0, words[c.first].start - 0.5));
-            }}
-            onAccept={(i) => change((x) => setAgentStatus(x, i, "accepted"))}
-            onRestore={(i) => change((x) => setAgentStatus(x, i, "restored"))}
-            onUndo={(i) => change((x) => setAgentStatus(x, i, "pending"))}
-          />
+          {tab === "changes" ? (
+            <Changes
+              words={words}
+              cuts={edits.agent}
+              summary={project.summary}
+              focus={focus}
+              onFocus={(i) => {
+                setFocus(i);
+                const c = edits.agent[i];
+                player.current?.pause();
+                player.current?.seekSource(Math.max(0, words[c.first].start - 0.5));
+              }}
+              onAccept={(i) => change((x) => setAgentStatus(x, i, "accepted"))}
+              onRestore={(i) => change((x) => setAgentStatus(x, i, "restored"))}
+              onUndo={(i) => change((x) => setAgentStatus(x, i, "pending"))}
+            />
+          ) : (
+            <Chat
+              messages={chat.messages}
+              running={asking}
+              words={words}
+              onSend={ask}
+              onStop={() => backend.stopClaude()}
+              onSeekWord={(i) => {
+                player.current?.pause();
+                player.current?.seekSource(Math.max(0, words[i].start - 0.5));
+              }}
+            />
+          )}
         </div>
       </div>
 

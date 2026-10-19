@@ -1,0 +1,127 @@
+//! The sidebar's conversation with Claude: runs the official `claude` CLI on
+//! Luke's plan (`claude -p`), with this app as its MCP server for the edit,
+//! and streams what Claude does back to the window as "claude-event"s.
+
+use crate::tools;
+use serde_json::{json, Value};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::Path;
+use std::process::{Child, Stdio};
+use std::sync::Mutex;
+
+/// The run in progress, so Stop can end it.
+#[derive(Default)]
+pub struct Running(pub Mutex<Option<Child>>);
+
+pub const TOOLS: [&str; 3] = ["mcp__roughcut__get_edit", "mcp__roughcut__cut_words", "mcp__roughcut__restore_words"];
+
+fn brief(recording: &str) -> String {
+    format!(
+        "You are Claude inside Roughcut, Luke's video editor, talking with him in the app's sidebar while he watches \
+         his video \"{recording}\". You can read and change the edit with the roughcut tools: call get_edit first, \
+         then cut or restore by word index. Your cuts show to Luke in blue as unreviewed until he keeps or restores \
+         them, so make the change he asks for rather than describing it, and give each cut a reason of a few words. \
+         Don't re-cut anything he restored unless he asks. Luke isn't technical: reply in a sentence or two of plain \
+         English, and give times like 00:12 so he can find things."
+    )
+}
+
+pub fn ask(
+    folder: &Path,
+    recording: &str,
+    duration: f64,
+    prompt: &str,
+    resume: Option<&str>,
+    running: &Running,
+    emit: impl Fn(Value),
+) -> Result<(), String> {
+    let claude = tools::claude().ok_or("Can't find Claude Code. Install it and run `claude` once in Terminal to log in.")?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mcp = json!({ "mcpServers": { "roughcut": {
+        "command": exe,
+        "args": ["--mcp", folder, duration.to_string()],
+    } } });
+    let mut cmd = tools::command(&claude);
+    cmd.current_dir(folder)
+        .args(["-p", "--model", "opus", "--output-format", "stream-json", "--verbose", "--tools", ""])
+        .args(["--strict-mcp-config", "--mcp-config", &mcp.to_string()])
+        .args(["--allowedTools", &TOOLS.join(",")])
+        .args(["--append-system-prompt", &brief(recording)]);
+    if let Some(id) = resume {
+        cmd.args(["--resume", id]);
+    }
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Couldn't start Claude: {e}"))?;
+    child.stdin.take().unwrap().write_all(prompt.as_bytes()).map_err(|e| e.to_string())?;
+    let stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    *running.0.lock().unwrap() = Some(child);
+
+    let mut last_error = None;
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        if let Ok(event) = serde_json::from_str::<Value>(&line) {
+            if event["type"] == "result" && event["is_error"] == true {
+                last_error = event["result"].as_str().map(String::from);
+            }
+            emit(event);
+        }
+    }
+    let mut err = String::new();
+    let _ = stderr.read_to_string(&mut err);
+    let child = running.0.lock().unwrap().take();
+    let Some(mut child) = child else {
+        return Ok(()); // stopped
+    };
+    let status = child.wait().map_err(|e| e.to_string())?;
+    if status.success() && last_error.is_none() {
+        return Ok(());
+    }
+    let detail = last_error.unwrap_or_else(|| err.trim().lines().last().unwrap_or("it stopped unexpectedly").to_string());
+    if detail.to_lowercase().contains("login") || detail.to_lowercase().contains("auth") {
+        return Err(format!("Claude needs you to log in again: open Terminal, run `claude`, then type /login. ({detail})"));
+    }
+    Err(format!("Claude stopped: {detail}"))
+}
+
+pub fn stop(running: &Running) {
+    if let Some(mut child) = running.0.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A stand-in `claude` that checks its arguments and prints a short stream.
+    #[test]
+    fn streams_events_from_the_cli() {
+        let dir = std::env::temp_dir().join(format!("roughcut-claude-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("claude");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nprompt=$(cat)\ncase \"$*\" in *--resume\\ abc*) ;; *) echo 'missing resume' >&2; exit 3;; esac\n\
+             echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"abc\"}'\n\
+             echo \"{\\\"type\\\":\\\"result\\\",\\\"is_error\\\":false,\\\"result\\\":\\\"$prompt\\\"}\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("ROUGHCUT_CLAUDE", &fake);
+        let events = std::cell::RefCell::new(vec![]);
+        let running = Running::default();
+        ask(&dir, "talk.mov", 10.0, "hello", Some("abc"), &running, |e| events.borrow_mut().push(e)).unwrap();
+        let events = events.into_inner();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1]["result"], "hello");
+        assert!(ask(&dir, "talk.mov", 10.0, "hello", None, &running, |_| {}).unwrap_err().contains("missing resume"));
+        std::env::remove_var("ROUGHCUT_CLAUDE");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

@@ -3,7 +3,11 @@
 //! exports the finished video. FFmpeg and the `roughcut` CLI do the heavy work
 //! as separate programs; the UI is web code drawn by macOS's own WebKit.
 
+mod claude;
+mod edits;
+mod mcp;
 mod media;
+mod server;
 mod tools;
 
 use serde::Serialize;
@@ -132,9 +136,56 @@ async fn export(app: AppHandle, source: String, ranges: Vec<(f64, f64)>, dest: S
     .map_err(|e| e.to_string())?
 }
 
+/// One turn of the sidebar conversation. Claude's stream arrives as
+/// "claude-event"s; this returns when the turn is over.
+#[tauri::command]
+async fn ask_claude(
+    app: AppHandle,
+    folder: String,
+    recording: String,
+    duration: f64,
+    prompt: String,
+    resume: Option<String>,
+) -> Result<(), String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let running = app.state::<claude::Running>();
+        claude::ask(Path::new(&folder), &recording, duration, &prompt, resume.as_deref(), &running, |event| {
+            let _ = app.emit("claude-event", event);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn stop_claude(running: tauri::State<claude::Running>) {
+    claude::stop(&running);
+}
+
+/// The sidebar conversation, kept next to the edit so it survives a restart.
+#[tauri::command]
+fn load_chat(folder: String) -> Value {
+    read_json(&PathBuf::from(folder).join("chat.json")).unwrap_or(Value::Null)
+}
+
+#[tauri::command]
+fn save_chat(folder: String, chat: Value) -> Result<(), String> {
+    let dir = PathBuf::from(&folder);
+    let tmp = dir.join(".chat.json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(&chat).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, dir.join("chat.json")).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn launch_file(launch: tauri::State<Launch>) -> Option<String> {
     launch.0.lock().unwrap().take()
+}
+
+/// Where the player loads a recording from (see server.rs).
+#[tauri::command]
+fn video_url(server: tauri::State<server::Server>, path: String) -> String {
+    server.url(Path::new(&path))
 }
 
 #[tauri::command]
@@ -144,9 +195,29 @@ fn reveal(path: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // `Roughcut --mcp <folder> <duration>`: serve the edit to Claude and exit.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--mcp") {
+        let folder = PathBuf::from(args.get(2).cloned().unwrap_or_default());
+        let duration = args.get(3).and_then(|d| d.parse().ok()).unwrap_or(0.0);
+        return mcp::serve(folder, duration);
+    }
+    // Write any crash's cause where it can be found later.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let dir = PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("Library/Logs/Roughcut");
+        let _ = fs::create_dir_all(&dir);
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+            use std::io::Write;
+            let _ = writeln!(f, "{info}\n{}", std::backtrace::Backtrace::force_capture());
+        }
+        default_hook(info);
+    }));
     let from_args = std::env::args().skip(1).find(|a| Path::new(a).is_file());
     tauri::Builder::default()
         .manage(Launch(Mutex::new(from_args)))
+        .manage(claude::Running::default())
+        .manage(server::Server::start().expect("couldn't start the video server"))
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             open_recording,
@@ -157,7 +228,12 @@ pub fn run() {
             waveform,
             export,
             reveal,
-            launch_file
+            launch_file,
+            video_url,
+            ask_claude,
+            stop_claude,
+            load_chat,
+            save_chat
         ])
         .build(tauri::generate_context!())
         .expect("error while starting Roughcut")

@@ -55,6 +55,18 @@ pub fn roughcut_cli() -> Option<PathBuf> {
     candidates.into_iter().next().or_else(|| on_path("roughcut"))
 }
 
+/// Claude Code's `claude` command: the native installer's ~/.local/bin, the
+/// older ~/.claude/local, then anything on PATH.
+pub fn claude() -> Option<PathBuf> {
+    if let Some(p) = env::var_os("ROUGHCUT_CLAUDE").map(PathBuf::from) {
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let local = home().join(".claude/local/claude");
+    on_path("claude").or_else(|| local.is_file().then_some(local))
+}
+
 pub fn ffmpeg() -> PathBuf {
     on_path("ffmpeg").unwrap_or_else(|| "ffmpeg".into())
 }

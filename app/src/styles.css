@@ -82,7 +82,7 @@ button { font: inherit; color: inherit; }
 .toolbar .title { color: var(--foreground); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .toolbar .sub { color: var(--muted-foreground); white-space: nowrap; }
 .spacer { flex: 1; }
-.main { display: grid; grid-template-columns: minmax(300px, 30%) minmax(0, 1fr) 300px; min-height: 0; }
+.main { display: grid; grid-template-columns: minmax(300px, 30%) minmax(0, 1fr) 320px; min-height: 0; }
 .panel { min-height: 0; display: flex; flex-direction: column; background: var(--sidebar); }
 .panel + .panel { border-left: 1px solid var(--border); }
 .panel-head {
@@ -157,6 +157,49 @@ button { font: inherit; color: inherit; }
 .change .why { color: var(--muted-foreground); font-size: 12px; margin-top: 2px; }
 .change .row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 .change .row .mono { font-size: 11px; color: var(--muted-foreground); margin-right: auto; }
+
+/* Right panel tabs: Claude's changes, and the conversation. */
+.panel-head.tabs { gap: 2px; padding-left: 6px; }
+.tabs > button:not(.btn) {
+  height: 26px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted-foreground);
+  font-weight: 500; display: inline-flex; align-items: center; gap: 6px; cursor: default;
+}
+.tabs > button:not(.btn):hover { color: var(--foreground); }
+.tabs > button.on { background: var(--selected); color: var(--ink); }
+.count {
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--unread); color: #fff;
+  font-size: 10px; display: inline-grid; place-items: center;
+}
+.pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-foreground); animation: pulse 1.2s var(--ease) infinite; }
+@keyframes pulse { 50% { opacity: 0.25; } }
+
+/* Chat. */
+.chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.chat .panel-body { display: flex; flex-direction: column; gap: 8px; }
+.chat-empty p { color: var(--muted-foreground); font-size: 13px; line-height: 1.55; margin: 4px 0 12px; }
+.chat-empty .btn { display: flex; width: 100%; margin-bottom: 6px; }
+.msg { font-size: 13px; line-height: 1.55; color: var(--foreground); white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
+.msg.you { align-self: flex-end; max-width: 88%; background: var(--card); border: 1px solid var(--stroke); border-radius: 12px; padding: 6px 10px; }
+.msg.error { color: var(--notification); }
+.msg.working { color: var(--muted-foreground); display: flex; align-items: center; gap: 8px; }
+.action {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 6px 8px; border-radius: 8px;
+  border: 1px solid var(--border); background: transparent; color: var(--subtle-foreground); font-size: 12px; cursor: default;
+}
+button.action:hover { background: var(--muted); }
+.action svg { color: var(--icon); flex: none; }
+.action.quiet { border-color: transparent; padding: 0 8px; color: var(--muted-foreground); }
+.action .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.action .words { color: var(--foreground); }
+.action .why { color: var(--muted-foreground); }
+.action .mono { font-size: 11px; color: var(--muted-foreground); }
+.composer { display: flex; align-items: flex-end; gap: 6px; padding: 10px 12px 12px; border-top: 1px solid var(--border); }
+.composer textarea {
+  flex: 1; resize: none; min-height: 28px; max-height: 120px; field-sizing: content; padding: 5px 10px; border-radius: 10px;
+  border: 1px solid var(--stroke); background: var(--card); color: var(--foreground); font: inherit; outline: none;
+}
+.composer textarea:focus { border-color: var(--grey-600); }
+.composer textarea::placeholder { color: var(--disabled); }
 
 /* Timeline. */
 .timeline { border-top: 1px solid var(--border); background: var(--sidebar); display: flex; flex-direction: column; }
