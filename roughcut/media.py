@@ -47,6 +47,32 @@ def _parse_tc(tc: str, fps: Fraction) -> float:
     return h * 3600 + m * 60 + s + f / round(float(fps))
 
 
+STANDARD_RATES = [Fraction(24000, 1001), Fraction(24), Fraction(25), Fraction(30000, 1001), Fraction(30),
+                  Fraction(50), Fraction(60000, 1001), Fraction(60)]
+
+
+def _rate(value: str | None) -> Fraction:
+    try:
+        r = Fraction(value or "0")
+    except (ValueError, ZeroDivisionError):
+        return Fraction(0)
+    return r if 0 < r <= 240 else Fraction(0)
+
+
+def _edit_rate(video: dict) -> Fraction:
+    """The frame rate to cut on. Screen recordings are variable frame rate, and
+    ffprobe's nominal rate for them can be odd (10 fps, 600 fps), so when the
+    stream is variable we snap to a standard rate that covers its average."""
+    r, avg = _rate(video.get("r_frame_rate")), _rate(video.get("avg_frame_rate"))
+    if not r and not avg:
+        return Fraction(30)
+    if not avg or abs(r - avg) / avg < Fraction(1, 100):
+        return r or avg
+    if r in STANDARD_RATES and r >= avg:
+        return r
+    return next((s for s in STANDARD_RATES if s >= avg * Fraction(98, 100)), Fraction(60))
+
+
 def probe(path: Path) -> SourceInfo:
     data = json.loads(
         _run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", str(path)])
@@ -56,10 +82,7 @@ def probe(path: Path) -> SourceInfo:
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
     if video is None:
         raise MediaError(f"{path.name} has no video stream.")
-    rate = video.get("r_frame_rate") or video.get("avg_frame_rate") or "30/1"
-    fps = Fraction(rate)
-    if fps <= 0 or fps > 240:
-        fps = Fraction(30)
+    fps = _edit_rate(video)
     tags = {**data.get("format", {}).get("tags", {}), **video.get("tags", {})}
     tc = tags.get("timecode")
     return SourceInfo(

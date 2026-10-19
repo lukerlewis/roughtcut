@@ -10,5 +10,5 @@ dist/
 __pycache__/
 *.egg-info/
 .venv/
-*.roughcut/
+* rough cut/
 .pytest_cache/

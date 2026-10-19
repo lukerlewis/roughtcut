@@ -12,29 +12,27 @@ The first step proves the core bet before any app exists: can Claude cut Luke's 
 4. Builds frame-accurate clip ranges: pads each cut so words aren't clipped and closes up long pauses.
 5. Writes `cut.fcpxml` for Final Cut, a `report.md` of every cut with its reason, and a small `preview.mp4`.
 
-Everything lands in `recording.mov.roughcut/` next to the source. The transcript is cached there, so rerunning (say with a tweaked style guide) skips straight to Claude.
+Everything lands in a `recording rough cut` folder next to the source. The transcript is cached there, so rerunning (say with a tweaked style guide) skips straight to Claude.
 
 ## Setup on the Mac
 
-Needs Homebrew, Python 3.10+ and Claude Code logged in with Luke's plan.
+From the repo folder in Terminal:
 
 ```sh
-brew install ffmpeg
-git clone https://github.com/lukerlewis/roughtcut && cd roughtcut
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e '.[mlx]'
-claude --version   # must be installed and logged in; run `claude` once if not
+bash scripts/setup-mac.sh
 ```
 
-The first transcription downloads the speech model (roughly 1.5 GB, once).
+It installs Homebrew if needed, then FFmpeg and uv, makes a private Python environment in `.venv`, installs Roughcut with the Apple Silicon speech engine, installs Claude Code if it's missing and checks it's logged in to Luke's plan, and downloads the speech model (roughly 1.5 GB, once). It's safe to run again.
 
 ## Running it
 
 ```sh
-roughcut cut ~/Movies/raw/take-01.mov
+bash cut.sh ~/Movies/raw/take-01.mov
 ```
 
-Then in Final Cut: **File > Import > XML…** and pick `take-01.mov.roughcut/cut.fcpxml`. It opens as a project in a "Roughcut" event, with a marker at each cut saying what was removed.
+`cut.sh` runs `roughcut cut` from the private environment and opens the results folder and report when it's done. Options below go after the file name.
+
+Then in Final Cut: **File > Import > XML…** and pick `take-01 rough cut/cut.fcpxml`. It opens as a project in a "Roughcut" event, with a marker at each cut saying what was removed.
 
 Useful options:
 

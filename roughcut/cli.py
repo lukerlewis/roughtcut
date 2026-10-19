@@ -1,6 +1,6 @@
 """roughcut cut <recording>: transcript in, rough cut out.
 
-Writes everything to <recording>.roughcut/ next to the source:
+Writes everything to a "<name> rough cut" folder next to the source:
   transcript.json   word timings (cached; reused on the next run)
   units.json        the units and flags Claude saw
   decisions.json    what was kept and cut, and why
@@ -31,7 +31,7 @@ def cut(args: argparse.Namespace) -> int:
     if not src_path.exists():
         log(f"Can't find {src_path}")
         return 1
-    out = Path(args.out).expanduser() if args.out else src_path.with_name(src_path.name + ".roughcut")
+    out = Path(args.out).expanduser() if args.out else src_path.with_name(f"{src_path.stem} rough cut")
     out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
 
@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("cut", help="make a rough cut of a recording")
     c.add_argument("recording")
-    c.add_argument("--out", help="output folder (default: <recording>.roughcut next to it)")
+    c.add_argument("--out", help='output folder (default: "<name> rough cut" next to the recording)')
     c.add_argument("--rules-only", action="store_true", help="skip Claude; cut fillers and earlier takes by rule")
     c.add_argument("--model", default="opus", help="Claude model alias for the CLI (default: opus)")
     c.add_argument("--style", help="style guide markdown (default: the built-in talking-head guide)")

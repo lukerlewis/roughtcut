@@ -130,3 +130,15 @@ def test_end_to_end_rules_only(tmp_path):
         assert (out / name).exists(), name
     dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(out / "preview.mp4")], capture_output=True, text=True).stdout)
     assert 15 < dur < 35
+
+
+def test_edit_rate_handles_variable_frame_rate():
+    from roughcut.media import _edit_rate
+
+    assert _edit_rate({"r_frame_rate": "30000/1001", "avg_frame_rate": "30000/1001"}) == Fraction(30000, 1001)
+    assert _edit_rate({"r_frame_rate": "60/1", "avg_frame_rate": "60/1"}) == 60
+    # A screen recording: nominal 60, averaging 41 because idle frames were skipped.
+    assert _edit_rate({"r_frame_rate": "60/1", "avg_frame_rate": "41/1"}) == 60
+    # ffprobe reporting an odd nominal rate for a variable stream.
+    assert _edit_rate({"r_frame_rate": "10000/1001", "avg_frame_rate": "23490000/1184183"}) == Fraction(24000, 1001)
+    assert _edit_rate({"r_frame_rate": "0/0", "avg_frame_rate": "0/0"}) == 30
