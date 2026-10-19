@@ -7,10 +7,11 @@ The first step proves the core bet before any app exists: can Claude cut Luke's 
 `roughcut cut recording.mov`:
 
 1. Pulls the audio out with FFmpeg and transcribes it on the Mac with word timings (mlx-whisper on Apple Silicon). Nothing is uploaded.
-2. Splits the transcript into short units and flags fillers, long pauses, abandoned sentences and likely retakes.
-3. Sends the units and the style guide to Claude through the `claude` CLI on Luke's plan (`claude -p`, Opus by default, no tools). Claude returns which units to cut and why.
-4. Builds frame-accurate clip ranges: pads each cut so words aren't clipped and closes up long pauses.
-5. Writes `cut.fcpxml` for Final Cut, a `report.md` of every cut with its reason, and a small `preview.mp4`.
+2. Checks the audio under any word that runs far longer than it should. Whisper often drops an "um" and stretches the next word over it and any pause, so the silence becomes a real gap and a held "um" sound becomes its own `[um]` word.
+3. Groups the words into short lines and flags fillers, long pauses, abandoned sentences and likely retakes.
+4. Sends the numbered words, the flags and the style guide to Claude through the `claude` CLI on Luke's plan (`claude -p`, Opus by default, no tools). Claude returns which spans of words to cut and why, so it can drop a false start without losing the good sentence before it.
+5. Builds frame-accurate clip ranges: pads each cut so words aren't clipped and closes up long pauses.
+6. Writes `cut.fcpxml` for Final Cut, a `report.md` of every cut with its reason, and a small `preview.mp4`.
 
 Everything lands in a `recording rough cut` folder next to the source. The transcript is cached there, so rerunning (say with a tweaked style guide) skips straight to Claude.
 
@@ -68,8 +69,7 @@ If it hits the targets, the app is worth building. If not, the fix is in the sty
 
 ## Known limits
 
-- Cuts are whole units (a phrase between pauses). It can't yet cut a single word out of the middle of a phrase.
-- Whisper sometimes tidies fillers out of the transcript even though the audio has them. Those stay in until the next phase adds an audio check.
+- The audio check finds an "um" Whisper left out only when it sits inside a stretched word and sounds like one held vowel. A quick "um" squeezed between two words can still slip through, and Whisper's word edges can be off by a tenth of a second or so.
 - Variable-frame-rate screen recordings are cut at their nominal frame rate. Final Cut handles this fine; other tools may drift slightly.
 - Only one source file per run. Multi-cam and separate audio come later.
 

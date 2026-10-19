@@ -12,32 +12,52 @@ import subprocess
 from dataclasses import dataclass, field
 
 from .analyze import Unit
+from .transcribe import Word
+
+
+@dataclass
+class Cut:
+    first: int  # index of the first word cut
+    last: int  # index of the last word cut (inclusive)
+    reason: str
 
 
 @dataclass
 class Decision:
-    keep: set[int]
-    reasons: dict[int, str]  # why each dropped unit was cut
+    cuts: list[Cut]  # in word order, never overlapping
     summary: str = ""
     by: str = "rules"
     usage: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
+    def kept(self, n_words: int) -> set[int]:
+        gone = {i for c in self.cuts for i in range(c.first, c.last + 1)}
+        return set(range(n_words)) - gone
+
+
+def tidy(cuts: list[Cut]) -> list[Cut]:
+    """Sort cuts and merge any that overlap, keeping the first reason."""
+    out: list[Cut] = []
+    for c in sorted(cuts, key=lambda c: (c.first, c.last)):
+        if out and c.first <= out[-1].last:
+            out[-1].last = max(out[-1].last, c.last)
+        else:
+            out.append(Cut(c.first, c.last, c.reason))
+    return out
+
 
 def rules(units: list[Unit]) -> Decision:
     """Baseline: drop fillers and earlier attempts at a line. Pauses are
     tightened later when ranges are built."""
-    keep, reasons = set(), {}
+    cuts = []
     for u in units:
         if u.kind == "filler":
-            reasons[u.id] = "Filler word"
+            cuts.append(Cut(u.first, u.last, "Filler word"))
         elif u.retake_of is not None:
-            reasons[u.id] = f"Earlier take of #{u.retake_of}"
+            cuts.append(Cut(u.first, u.last, "Earlier take of a line said again later"))
         elif "trails off" in u.flags:
-            reasons[u.id] = "Abandoned sentence"
-        else:
-            keep.add(u.id)
-    return Decision(keep, reasons, by="rules")
+            cuts.append(Cut(u.first, u.last, "Abandoned sentence"))
+    return Decision(tidy(cuts), by="rules")
 
 
 def _fmt(t: float) -> str:
@@ -45,15 +65,16 @@ def _fmt(t: float) -> str:
     return f"{int(m):02d}:{s:04.1f}"
 
 
-def build_prompt(units: list[Unit], style: str, duration: float) -> str:
+def build_prompt(units: list[Unit], words: list[Word], style: str, duration: float) -> str:
     lines = []
     for u in units:
         flags = f" [{'; '.join(u.flags)}]" if u.flags else ""
-        lines.append(f"#{u.id} {_fmt(u.start)}-{_fmt(u.end)} pause {u.pause_before:.1f}s{flags} | {u.text}")
+        tagged = " ".join(f"{i}:{words[i].text}" for i in range(u.first, u.last + 1))
+        lines.append(f"{_fmt(u.start)}-{_fmt(u.end)} pause {u.pause_before:.1f}s{flags}\n  {tagged}")
     listing = "\n".join(lines)
-    return f"""You are making the rough cut of a raw recording ({_fmt(duration)} long). The transcript below is split into numbered units with timings, the pause before each, and flags from an automatic pass. Flags are hints, not decisions.
+    return f"""You are making the rough cut of a raw recording ({_fmt(duration)} long). The transcript below is grouped into lines with timings, the pause before each line, and flags from an automatic pass. Flags are hints, not decisions. Every word carries its number, as number:word. [um] marks a held sound found in the audio that speech-to-text left out, almost always an um or uh; cut it unless the words around it read as if a word is missing there.
 
-Decide which units to keep so the video plays as a tight, natural first cut. Typical cuts: false starts and earlier takes of a line that is said again later (keep the best take, usually the last), filler words, abandoned sentences, off-topic chatter before the real start or after the real end, and "let me redo that" moments. Don't rewrite or reorder anything; you can only keep or drop whole units. When unsure, keep it. Pauses between kept units are tightened automatically, so don't cut a unit just for its pause.
+Decide which words to cut so the video plays as a tight, natural first cut. Typical cuts: false starts and earlier takes of a line that is said again later (keep the best take, usually the last), filler words and hesitations, stammered or repeated words ("this is a this, this is a"), abandoned sentences, off-topic chatter before the real start or after the real end, and "let me redo that" moments. Cut precisely: a line can hold a good sentence followed by a false start, so cut only the words that should go and keep the rest. A cut is a span of consecutive word numbers. Don't rewrite or reorder anything. When unsure, keep it. Pauses between kept words are tightened automatically, so don't cut words just for a pause.
 
 Style guide:
 {style.strip()}
@@ -62,8 +83,8 @@ Transcript:
 {listing}
 
 Reply with only a JSON object, no prose around it:
-{{"cuts": [{{"id": <unit id>, "reason": "<short reason>"}}], "summary": "<two or three sentences to Luke on what you did and anything he should check, pointing to moments by timecode (mm:ss), never by unit number>"}}
-Every unit not listed in "cuts" is kept."""
+{{"cuts": [{{"from": <first word number>, "to": <last word number, inclusive>, "reason": "<short reason>"}}], "summary": "<two or three sentences to Luke on what you did and anything he should check, pointing to moments by timecode (mm:ss), never by word number>"}}
+Every word not inside a cut is kept."""
 
 
 SCHEMA = {
@@ -73,8 +94,8 @@ SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"id": {"type": "integer"}, "reason": {"type": "string"}},
-                "required": ["id", "reason"],
+                "properties": {"from": {"type": "integer"}, "to": {"type": "integer"}, "reason": {"type": "string"}},
+                "required": ["from", "to", "reason"],
             },
         },
         "summary": {"type": "string"},
@@ -108,8 +129,8 @@ def claude_command(model: str) -> list[str]:
     return cmd
 
 
-def claude(units: list[Unit], style: str, duration: float, model: str = "opus", timeout: int = 1200) -> Decision:
-    prompt = build_prompt(units, style, duration)
+def claude(units: list[Unit], words: list[Word], style: str, duration: float, model: str = "opus", timeout: int = 1200) -> Decision:
+    prompt = build_prompt(units, words, style, duration)
     proc = subprocess.run(claude_command(model), input=prompt, capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0:
         raise RuntimeError(f"claude exited with {proc.returncode}: {(proc.stderr or proc.stdout).strip()[-800:]}")
@@ -119,17 +140,16 @@ def claude(units: list[Unit], style: str, duration: float, model: str = "opus", 
     data = outer.get("structured_output") or _extract_json(outer.get("result", ""))
     usage = {k: outer[k] for k in ("duration_ms", "num_turns", "total_cost_usd", "usage", "modelUsage") if k in outer}
 
-    ids = {u.id for u in units}
-    reasons, warnings = {}, []
+    cuts, warnings = [], []
     for c in data.get("cuts", []):
         try:
-            uid = int(c["id"])
+            a, b = int(c["from"]), int(c["to"])
         except (KeyError, TypeError, ValueError):
             warnings.append(f"Ignored a malformed cut: {c!r}")
             continue
-        if uid not in ids:
-            warnings.append(f"Ignored a cut for unknown unit #{uid}")
+        a, b = min(a, b), max(a, b)
+        if a < 0 or b >= len(words):
+            warnings.append(f"Ignored a cut for words {a}-{b}, outside the transcript")
             continue
-        reasons[uid] = str(c.get("reason", "")).strip() or "Cut by Claude"
-    keep = ids - set(reasons)
-    return Decision(keep, reasons, summary=str(data.get("summary", "")), by=f"claude ({model})", usage=usage, warnings=warnings)
+        cuts.append(Cut(a, b, str(c.get("reason", "")).strip() or "Cut by Claude"))
+    return Decision(tidy(cuts), summary=str(data.get("summary", "")), by=f"claude ({model})", usage=usage, warnings=warnings)

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .analyze import Unit
-from .decide import Decision
+from .decide import Cut, Decision
+from .transcribe import Word
 
 
 def _tc(t: float) -> str:
@@ -14,13 +14,18 @@ def _tc(t: float) -> str:
     return f"{h:d}:{m:02d}:{s:05.2f}" if h else f"{m:02d}:{s:05.2f}"
 
 
-def write(dest: Path, name: str, units: list[Unit], d: Decision, duration: float, cut_duration: float, n_clips: int) -> Path:
-    cuts = [u for u in units if u.id not in d.keep]
+def span_text(words: list[Word], c: Cut) -> str:
+    return " ".join(words[i].text for i in range(c.first, c.last + 1))
+
+
+def write(dest: Path, name: str, words: list[Word], d: Decision, duration: float, cut_duration: float, n_clips: int) -> Path:
+    cuts = d.cuts
+    n_cut_words = sum(c.last - c.first + 1 for c in cuts)
     saved = duration - cut_duration
     out = [
         f"# Rough cut: {name}",
         "",
-        f"Decided by **{d.by}**. {_tc(duration)} raw, {_tc(cut_duration)} cut ({saved / max(duration, 1e-9):.0%} shorter), {n_clips} clips, {len(cuts)} of {len(units)} transcript units cut.",
+        f"Decided by **{d.by}**. {_tc(duration)} raw, {_tc(cut_duration)} cut ({saved / max(duration, 1e-9):.0%} shorter), {n_clips} clips, {len(cuts)} cuts removing {n_cut_words} of {len(words)} words.",
         "",
     ]
     if d.summary:
@@ -42,17 +47,17 @@ def write(dest: Path, name: str, units: list[Unit], d: Decision, duration: float
     if d.warnings:
         out += ["## Warnings", ""] + [f"- {w}" for w in d.warnings] + [""]
     out += ["## What was cut", "", "| At | Cut | Why |", "| --- | --- | --- |"]
-    for u in cuts:
-        text = u.text.replace("|", "\\|")
-        out.append(f"| {_tc(u.start)} | {text} | {d.reasons.get(u.id, '')} |")
+    for c in cuts:
+        text = span_text(words, c).replace("|", "\\|")
+        reason = c.reason.replace("|", "\\|")
+        out.append(f"| {_tc(words[c.first].start)} | {text} | {reason} |")
     out += [
         "",
-        "## Scorecard (fill in after reviewing in Final Cut)",
+        "## Scorecard (fill in after watching preview.mp4)",
         "",
         "| Check | Target | Result |",
         "| --- | --- | --- |",
         f"| Cuts you kept, out of {len(cuts)} | 80% or more | |",
-        "| Time to finish the edit vs. your usual | Under half | |",
         "| Words clipped at a cut point | None | |",
         "| Takes Claude picked that you'd swap | Few | |",
         "",

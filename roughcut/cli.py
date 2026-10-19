@@ -1,8 +1,9 @@
 """roughcut cut <recording>: transcript in, rough cut out.
 
 Writes everything to a "<name> rough cut" folder next to the source:
-  transcript.json   word timings (cached; reused on the next run)
-  units.json        the units and flags Claude saw
+  transcript.json   word timings from speech-to-text (cached; reused on the next run)
+  words.json        the same words with timings corrected from the audio, and hidden ums added
+  units.json        the lines and flags Claude saw
   decisions.json    what was kept and cut, and why
   cut.fcpxml        open this in Final Cut Pro (File > Import > XML)
   report.md         what was cut, Claude's notes, and a test scorecard
@@ -19,7 +20,7 @@ from dataclasses import asdict
 from importlib import resources
 from pathlib import Path
 
-from . import analyze, decide, fcpxml, media, report, timeline, transcribe
+from . import analyze, decide, fcpxml, hesitations, media, report, timeline, transcribe
 
 
 def log(msg: str) -> None:
@@ -42,6 +43,7 @@ def cut(args: argparse.Namespace) -> int:
         return 1
 
     tpath = out / "transcript.json"
+    wav = out / "audio.wav"
     if args.transcript:
         words = transcribe.load(Path(args.transcript))
         log(f"Using transcript {args.transcript} ({len(words)} words)")
@@ -51,31 +53,42 @@ def cut(args: argparse.Namespace) -> int:
     else:
         backend = args.backend or transcribe.default_backend()
         log(f"Transcribing on this machine with {backend}…")
-        wav = media.extract_audio(src.path, out / "audio.wav")
+        media.extract_audio(src.path, wav)
         words = transcribe.transcribe(wav, backend, args.whisper_model)
         transcribe.save(words, tpath)
-        wav.unlink(missing_ok=True)
         log(f"{len(words)} words")
     if not words:
         log("No speech found.")
         return 1
 
+    try:
+        if not wav.exists():
+            media.extract_audio(src.path, wav)
+        words, fixed, found = hesitations.refine(words, hesitations.analyse(wav))
+        log(f"Checked the audio: fixed the timing of {fixed} stretched words, found {found} hidden ums")
+    except ImportError:
+        log("numpy isn't installed, so word timings weren't checked against the audio")
+    finally:
+        wav.unlink(missing_ok=True)
+    transcribe.save(words, out / "words.json")
+
     units = analyze.analyze(words)
     (out / "units.json").write_text(json.dumps([asdict(u) for u in units], indent=1))
     flagged = sum(1 for u in units if u.flags)
-    log(f"{len(units)} units, {flagged} flagged (fillers, retakes, trailing off)")
+    log(f"{len(units)} lines, {flagged} flagged (fillers, retakes, trailing off)")
 
     if args.rules_only:
         d = decide.rules(units)
     else:
         style = Path(args.style).read_text() if args.style else resources.files("roughcut").joinpath("styles/talking-head.md").read_text()
         log(f"Asking Claude ({args.model}) for the cut… this uses your Claude plan")
-        d = decide.claude(units, style, src.duration, model=args.model)
+        d = decide.claude(units, words, style, src.duration, model=args.model)
     for w in d.warnings:
         log(f"warning: {w}")
 
     p = timeline.Params(pad_in=args.pad_in, pad_out=args.pad_out, max_pause=args.max_pause)
-    ranges = timeline.kept_ranges(units, words, d.keep, src.duration, p)
+    keep = d.kept(len(words))
+    ranges = timeline.kept_ranges(words, keep, src.duration, p)
     clips = timeline.snap(ranges, src.fps)
     cut_len = sum(b - a for a, b in clips) / float(src.fps)
 
@@ -86,17 +99,20 @@ def cut(args: argparse.Namespace) -> int:
             continue
         lo = clips[i - 1][1] / float(src.fps) if i else 0.0
         hi = a / float(src.fps)
-        gone = [u for u in units if u.id not in d.keep and u.start >= lo - p.pad_out - 0.05 and u.end <= hi + p.pad_in + 0.05]
+        gone = [c for c in d.cuts if words[c.first].start >= lo - p.pad_out - 0.05 and words[c.last].end <= hi + p.pad_in + 0.05]
         if gone:
-            markers[i] = "Cut: " + "; ".join(f"{d.reasons.get(u.id, 'cut')} ({u.text[:40]})" for u in gone[:3])
+            markers[i] = "Cut: " + "; ".join(f"{c.reason} ({report.span_text(words, c)[:40]})" for c in gone[:3])
 
     (out / "decisions.json").write_text(
         json.dumps(
             {
                 "by": d.by,
                 "summary": d.summary,
-                "kept": sorted(d.keep),
-                "cuts": [{"id": i, "reason": r} for i, r in sorted(d.reasons.items())],
+                "cuts": [
+                    {"from": c.first, "to": c.last, "start": words[c.first].start, "end": words[c.last].end,
+                     "text": report.span_text(words, c), "reason": c.reason}
+                    for c in d.cuts
+                ],
                 "clips_frames": clips,
                 "fps": str(src.fps),
                 "usage": d.usage,
@@ -105,7 +121,7 @@ def cut(args: argparse.Namespace) -> int:
         )
     )
     fcpxml.write(src, clips, out / "cut.fcpxml", f"{src_path.stem} rough cut", markers)
-    report.write(out / "report.md", src_path.name, units, d, src.duration, cut_len, len(clips))
+    report.write(out / "report.md", src_path.name, words, d, src.duration, cut_len, len(clips))
     if not args.no_preview:
         log("Rendering preview.mp4…")
         media.render_preview(src.path, [(a / float(src.fps), b / float(src.fps)) for a, b in clips], out / "preview.mp4")
