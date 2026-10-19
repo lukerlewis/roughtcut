@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roughcut playback test</title>
+<style>
+  :root {
+    --bg: #fafafa; --panel: #ffffff; --line: #e5e5e5; --text: #171717; --muted: #737373;
+    --good: #16a34a; --bad: #d92d20;
+    font: 13px/1.45 -apple-system, "Geist", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0a0a0a; --panel: #171717; --line: #262626; --text: #fafafa; --muted: #a3a3a3; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--text); }
+  main { max-width: 980px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  video { width: 100%; background: #000; border-radius: 8px; display: block; }
+  input[type=range] { width: 100%; margin: 10px 0 2px; }
+  button, label.btn {
+    font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); cursor: pointer; display: inline-block;
+  }
+  button.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+  button:disabled { opacity: .4; cursor: default; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td { padding: 6px 4px; border-top: 1px solid var(--line); }
+  td:last-child { text-align: right; font-weight: 600; }
+  .pass { color: var(--good); } .fail { color: var(--bad); }
+  pre { white-space: pre-wrap; font: 12px ui-monospace, monospace; color: var(--muted); margin: 8px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Roughcut playback test</h1>
+  <p>Checks whether the Mac's built-in web engine, the same one the Roughcut app will use, can play and scrub 4K smoothly. Pick the test video, press Run, and keep this window in front until it finishes.</p>
+
+  <div class="panel">
+    <div class="row">
+      <label class="btn">Choose video…<input id="file" type="file" accept="video/*" hidden></label>
+      <button id="run" class="primary" disabled>Run the test</button>
+      <span id="info" class="meta">No video chosen</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <video id="v" muted playsinline preload="auto"></video>
+    <input id="scrub" type="range" min="0" max="1000" value="0" disabled>
+    <div class="meta" id="time">Drag the slider to try scrubbing by hand.</div>
+  </div>
+
+  <div class="panel">
+    <table id="results">
+      <tr><td>Jump to a random point (typical)</td><td id="r-seek">–</td></tr>
+      <tr><td>Jump to a random point (slowest 1 in 20)</td><td id="r-seek95">–</td></tr>
+      <tr><td>Frames shown while scrubbing, per second</td><td id="r-scrub">–</td></tr>
+      <tr><td>Frames dropped during normal playback</td><td id="r-drop">–</td></tr>
+      <tr><td>Overall</td><td id="r-verdict">–</td></tr>
+    </table>
+    <div class="row" style="margin-top:10px">
+      <button id="copy" disabled>Copy results</button>
+      <span class="meta" id="status"></span>
+    </div>
+    <pre id="log"></pre>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const v = $("v");
+let fileInfo = "";
+let report = "";
+
+const nextFrame = () => new Promise((resolve) => {
+  if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => resolve());
+  else v.addEventListener("seeked", () => resolve(), { once: true });
+});
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const pct = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
+const log = (msg) => { $("log").textContent += msg + "\n"; };
+
+$("file").addEventListener("change", () => {
+  const f = $("file").files[0];
+  if (!f) return;
+  v.src = URL.createObjectURL(f);
+  fileInfo = `${f.name}, ${(f.size / 1e6).toFixed(0)} MB`;
+  $("info").textContent = "Loading…";
+});
+
+v.addEventListener("loadedmetadata", () => {
+  fileInfo += `, ${v.videoWidth}x${v.videoHeight}, ${v.duration.toFixed(1)}s`;
+  $("info").textContent = fileInfo;
+  $("run").disabled = false;
+  $("scrub").disabled = false;
+});
+v.addEventListener("error", () => { $("info").textContent = "This video won't play here. Try the test video from the guide."; });
+
+$("scrub").addEventListener("input", () => {
+  v.currentTime = ($("scrub").value / 1000) * v.duration;
+});
+v.addEventListener("timeupdate", () => { $("time").textContent = `${v.currentTime.toFixed(2)}s of ${v.duration.toFixed(1)}s`; });
+
+async function seekTest(n) {
+  const times = [];
+  for (let i = 0; i < n; i++) {
+    const t = Math.random() * (v.duration - 1);
+    const t0 = performance.now();
+    const shown = nextFrame();
+    v.currentTime = t;
+    await shown;
+    times.push(performance.now() - t0);
+    $("status").textContent = `Jumping around: ${i + 1} of ${n}`;
+  }
+  return times;
+}
+
+async function scrubTest(seconds) {
+  // Drag the playhead steadily across the video, like a finger on the trackpad.
+  // Like a real editor, each new position is asked for as soon as the last frame
+  // is on screen, so this counts how many distinct frames reach the screen.
+  let frames = 0;
+  const start = performance.now();
+  const span = Math.min(v.duration - 1, 20);
+  while (performance.now() - start < seconds * 1000) {
+    const k = (performance.now() - start) / (seconds * 1000);
+    const shown = nextFrame();
+    v.currentTime = 0.5 + k * span;
+    await Promise.race([shown, sleep(1000)]);
+    frames++;
+    $("status").textContent = `Scrubbing: ${Math.round(k * 100)}%`;
+  }
+  return frames / seconds;
+}
+
+async function playTest(seconds) {
+  v.currentTime = 0;
+  await nextFrame();
+  const q0 = v.getVideoPlaybackQuality();
+  await v.play();
+  for (let s = seconds; s > 0; s--) { $("status").textContent = `Playing: ${s}s left`; await sleep(1000); }
+  v.pause();
+  const q1 = v.getVideoPlaybackQuality();
+  const total = q1.totalVideoFrames - q0.totalVideoFrames;
+  const dropped = q1.droppedVideoFrames - q0.droppedVideoFrames;
+  return { total, dropped };
+}
+
+function mark(id, text, ok) {
+  $(id).textContent = text;
+  $(id).className = ok ? "pass" : "fail";
+}
+
+$("run").addEventListener("click", async () => {
+  $("run").disabled = true;
+  $("log").textContent = "";
+  try {
+    const seeks = await seekTest(40);
+    const med = pct(seeks, 0.5), p95 = pct(seeks, 0.95);
+    mark("r-seek", `${med.toFixed(0)} ms`, med < 150);
+    mark("r-seek95", `${p95.toFixed(0)} ms`, p95 < 400);
+
+    const fps = await scrubTest(4);
+    mark("r-scrub", `${fps.toFixed(0)}`, fps >= 12);
+
+    const play = await playTest(10);
+    const dropRate = play.total ? play.dropped / play.total : 1;
+    mark("r-drop", `${play.dropped} of ${play.total}`, dropRate < 0.02);
+
+    const ok = med < 150 && p95 < 400 && fps >= 12 && dropRate < 0.02;
+    mark("r-verdict", ok ? "Passed" : "Needs a closer look", ok);
+    $("status").textContent = "Done.";
+    report = [
+      "Roughcut playback test",
+      `Video: ${fileInfo}`,
+      `Browser: ${navigator.userAgent}`,
+      `Seek median ${med.toFixed(0)} ms, p95 ${p95.toFixed(0)} ms`,
+      `Scrub ${fps.toFixed(1)} frames/s`,
+      `Playback dropped ${play.dropped} of ${play.total} frames`,
+      `Frame callbacks: ${v.requestVideoFrameCallback ? "yes" : "no"}`,
+      `Verdict: ${ok ? "passed" : "needs a closer look"}`,
+    ].join("\n");
+    log(report);
+    $("copy").disabled = false;
+  } catch (e) {
+    $("status").textContent = "Something went wrong: " + e.message;
+  }
+  $("run").disabled = false;
+});
+
+$("copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(report); $("status").textContent = "Copied. Paste it into the chat."; }
+  catch { $("status").textContent = "Couldn't copy; select the text below instead."; }
+});
+</script>
+</body>
+</html>
