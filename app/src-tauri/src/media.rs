@@ -102,29 +102,43 @@ pub fn concat_graph(ranges: &[(f64, f64)], height: Option<u32>) -> String {
 }
 
 /// Renders the cut at full quality. Calls `progress` with 0..1 as it goes.
+/// Tries the Mac's hardware encoder first and falls back to x264, so a
+/// machine (or FFmpeg build) without it still exports.
 pub fn export(source: &Path, ranges: &[(f64, f64)], dest: &Path, progress: impl Fn(f64)) -> Result<(), String> {
     if ranges.is_empty() {
         return Err("Nothing is kept, so there's nothing to export.".into());
     }
-    let total: f64 = ranges.iter().map(|(a, b)| b - a).sum();
-    let script = dest.with_extension("filter.txt");
-    fs::write(&script, concat_graph(ranges, None)).map_err(|e| format!("Couldn't write to {}: {e}", dest.display()))?;
-    // The Mac's hardware encoder, at a generous bitrate for the size: about
-    // 12 Mbit/s for 1080p30 and 50 for 4K30.
+    // A generous bitrate for the size: about 12 Mbit/s for 1080p30 and 50 for 4K30.
     let info = probe(source)?;
     let bitrate = ((info.width as f64 * info.height as f64 * info.fps * 0.2) as u64).max(4_000_000).to_string();
-    let video: Vec<&str> = if cfg!(target_os = "macos") {
-        vec!["-c:v", "h264_videotoolbox", "-b:v", &bitrate, "-allow_sw", "1"]
-    } else {
-        vec!["-c:v", "libx264", "-preset", "medium", "-crf", "18"]
-    };
+    let mut encoders: Vec<Vec<&str>> = Vec::new();
+    if cfg!(target_os = "macos") {
+        encoders.push(vec!["-c:v", "h264_videotoolbox", "-b:v", &bitrate]);
+    }
+    encoders.push(vec!["-c:v", "libx264", "-preset", "medium", "-crf", "18"]);
+    let mut last = String::new();
+    for video in &encoders {
+        match encode(source, ranges, dest, video, &progress) {
+            Ok(()) => {
+                progress(1.0);
+                return Ok(());
+            }
+            Err(e) => last = e,
+        }
+    }
+    let _ = fs::remove_file(dest);
+    Err(format!("The export failed: {last}"))
+}
+
+fn encode(source: &Path, ranges: &[(f64, f64)], dest: &Path, video: &[&str], progress: &impl Fn(f64)) -> Result<(), String> {
+    let total: f64 = ranges.iter().map(|(a, b)| b - a).sum();
     let mut child = tools::command(tools::ffmpeg())
         .args(["-v", "error", "-y", "-i"])
         .arg(source)
-        .arg("-filter_complex_script")
-        .arg(&script)
+        .arg("-filter_complex")
+        .arg(concat_graph(ranges, None))
         .args(["-map", "[v]", "-map", "[a]"])
-        .args(&video)
+        .args(video)
         .args(["-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-progress", "pipe:1"])
         .arg(dest)
         .stdout(Stdio::piped())
@@ -141,12 +155,11 @@ pub fn export(source: &Path, ranges: &[(f64, f64)], dest: &Path, progress: impl 
         let _ = e.read_to_string(&mut err);
     }
     let status = child.wait().map_err(|e| e.to_string())?;
-    let _ = fs::remove_file(&script);
-    if !status.success() {
-        return Err(format!("The export failed: {}", err.trim().lines().last().unwrap_or("ffmpeg stopped")));
+    if status.success() {
+        Ok(())
+    } else {
+        Err(err.trim().lines().last().unwrap_or("ffmpeg stopped").to_string())
     }
-    progress(1.0);
-    Ok(())
 }
 
 #[cfg(test)]
