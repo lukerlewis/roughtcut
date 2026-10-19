@@ -129,7 +129,7 @@ export function Transcript(p: Props) {
   const n = sel ? sel.last - sel.first + 1 : 0;
 
   return (
-    <div className="panel-body" ref={box}>
+    <div className="transcript-wrap">
       {sel && n > 0 && (
         <div className="selbar">
           <span>
@@ -148,19 +148,21 @@ export function Transcript(p: Props) {
           )}
         </div>
       )}
-      <div className="transcript">
-        {paras.map((idx) => (
-          <Para
-            key={idx[0]}
-            idx={idx}
-            words={p.words}
-            kinds={p.kinds}
-            current={idx.includes(p.current) ? p.current : -1}
-            sel={sel && sel.last >= idx[0] && sel.first <= idx[idx.length - 1] ? sel : null}
-            onDown={onDown}
-            onEnter={onEnter}
-          />
-        ))}
+      <div className="panel-body" ref={box}>
+        <div className="transcript">
+          {paras.map((idx) => (
+            <Para
+              key={idx[0]}
+              idx={idx}
+              words={p.words}
+              kinds={p.kinds}
+              current={idx.includes(p.current) ? p.current : -1}
+              sel={sel && sel.last >= idx[0] && sel.first <= idx[idx.length - 1] ? sel : null}
+              onDown={onDown}
+              onEnter={onEnter}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
