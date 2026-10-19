@@ -39,6 +39,9 @@ jobs:
       - run: npm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npx tauri build --bundles app,dmg
+      # Ad-hoc signed, so macOS offers "Open Anyway" instead of calling a download "damaged".
+      - name: Check the app is signed
+        run: codesign --verify --deep --strict --verbose=2 src-tauri/target/release/bundle/macos/Roughcut.app
       - name: Zip the app
         run: |
           cd src-tauri/target/release/bundle/macos
