@@ -71,10 +71,11 @@ import {
   timecode,
   trimClip,
   wordAt,
-  zoomAt,
+  zoomMoves,
+  frameAt,
+  nextZoomScale,
+  migrateZooms,
   zoomBox,
-  zoomScaleAt,
-  setZoomEase,
   zoomPointFor,
   type CaptionStyle,
   type Edits,
@@ -253,7 +254,7 @@ export default function App() {
         backend.loadChat(opened.folder).catch(() => null),
       ]);
       history.current = { undo: [], redo: [] };
-      setEdits(loaded.edits ?? fromDecisions(loaded.decisions));
+      setEdits(migrateZooms(loaded.edits ?? fromDecisions(loaded.decisions), loaded.words));
       setChat(savedChat ?? { session: null, messages: [] });
       setProject({ source: path, folder: opened.folder, url, info, words: loaded.words, summary: loaded.decisions.summary ?? "" });
       setPhase({ kind: "ready" });
@@ -530,7 +531,8 @@ export default function App() {
   const pickedBlur = effect?.kind === "blur" ? edits?.blurs?.[effect.index] : undefined;
   const pickedAny = picked || pickedClip || pickedText || pickedNote || pickedSpeed || pickedBlur || !!pickedGraphic;
   // While a zoom's or blur's settings are open the video shows whole, with a box to drag.
-  const zoom = picked || pickedBlur ? null : zoomAt(words, zooms, state.source);
+  const moves = useMemo(() => zoomMoves(words, zooms), [words, zooms]);
+  const frame = picked || pickedBlur ? null : frameAt(moves, state.source);
   // Blurs: shown live over the video; the picked one is a box to move and resize.
   const [blurDraft, setBlurDraft] = useState<Rect | null>(null);
   const blurBox = pickedBlur ? (blurDraft ?? pickedBlur) : null;
@@ -584,7 +586,7 @@ export default function App() {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
-  const box = picked ? zoomBox(look ?? picked) : null;
+  const box = picked && (look ?? picked).scale > 1.001 ? zoomBox(look ?? picked) : null;
   const frameRef = useRef<HTMLDivElement>(null);
   const dragBox = (e: React.PointerEvent) => {
     if (!picked || !box || !frameRef.current || !effect) return;
@@ -708,7 +710,7 @@ export default function App() {
     let last = first;
     while (last + 1 < words.length && words[last + 1].start < span[1]) last++;
     if (first < 0) return;
-    change((x) => addZoom(x, first, last));
+    change((x) => addZoom(x, first, last, nextZoomScale(words, x.zooms ?? [], words[first].start)));
     setSelection(null);
     setTimeout(() => setEdits((cur) => {
       const index = cur?.zooms?.findIndex((z) => z.first === first && z.by === "you") ?? -1;
@@ -1068,7 +1070,7 @@ export default function App() {
 
   const toggleZoom = (first: number, last: number) => {
     const overlaps = zooms.some((z) => z.first <= last && z.last >= first);
-    change((x) => (overlaps ? removeZooms(x, first, last) : addZoom(x, first, last)));
+    change((x) => (overlaps ? removeZooms(x, first, last) : addZoom(x, first, last, nextZoomScale(words, x.zooms ?? [], words[first].start))));
     setSelection(null);
   };
 
@@ -1377,7 +1379,7 @@ export default function App() {
             >
               <div
                 className="zoomer"
-                style={zoom ? { transform: `scale(${zoomScaleAt(words, zoom, state.source)})`, transformOrigin: `${zoom.x * 100}% ${zoom.y * 100}%` } : undefined}
+                style={frame && frame.scale > 1.001 ? { transform: `scale(${frame.scale})`, transformOrigin: `${frame.x * 100}% ${frame.y * 100}%` } : undefined}
               >
                 <video ref={videoA} src={project.url} />
                 <video ref={videoB} src={project.url} />
@@ -1522,7 +1524,6 @@ export default function App() {
                 if (effect) change((x) => setZoomLook(x, effect.index, l));
                 setLook(null);
               }}
-              onZoomEase={(ease) => effect && change((x) => setZoomEase(x, effect.index, ease))}
               onMotionDefault={makeMotionDefault}
               graphic={pickedGraphic}
               graphicSource={pickedSource}

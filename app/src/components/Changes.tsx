@@ -131,7 +131,7 @@ export function Changes(p: Props) {
             <div className="text">
               <ZoomIn size={13} /> {text(z.first, z.last)}
             </div>
-            <div className="why">{z.status === "restored" ? "Zoom removed" : `Zoom in · ${z.reason ?? ""}`}</div>
+            <div className="why">{z.status === "restored" ? "Zoom removed" : `${z.scale <= 1.001 ? "Zoom out" : "Zoom in"} · ${z.reason ?? ""}`}</div>
             <div className="row">
               <span className="mono">{timecode(p.words[z.first]?.start ?? 0)}</span>
               {z.status === "pending" && (

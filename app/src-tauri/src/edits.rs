@@ -46,7 +46,7 @@ pub struct Zoom {
     pub start: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end: Option<f64>,
-    /// Seconds to zoom in at the start and back out at the end (0 is instant).
+    /// Old projects only, from before zooms were moves (the editor migrates them).
     #[serde(default, rename = "easeIn", skip_serializing_if = "Option::is_none")]
     pub ease_in: Option<f64>,
     #[serde(default, rename = "easeOut", skip_serializing_if = "Option::is_none")]
@@ -140,6 +140,7 @@ pub fn load(folder: &Path) -> Result<Edits, String> {
         // Opened uncut: every pause plays until Luke asks for a rough cut.
         other.insert("keepPauses".into(), Value::Bool(true));
     }
+    other.insert("zoomMoves".into(), Value::Bool(true));
     Ok(Edits { version: 1, agent, user: vec![], log: vec![], zooms: vec![], captions: None, clips: vec![], other })
 }
 
@@ -282,7 +283,8 @@ pub fn add_clip(e: &mut Edits, file: &str, start: f64, end: f64, length: f64, re
     e.log.push(serde_json::json!({ "at": now(), "by": "agent", "op": "clip", "note": format!("{file} {start:.2}-{end:.2}: {reason}") }));
 }
 
-/// Claude zooms in on first..last. Overlapping zooms that aren't Luke's are replaced.
+/// Claude zooms over first..last: the frame moves from what it showed to
+/// this zoom (1 is the whole frame, so zooming out) and holds until the next. Overlapping zooms that aren't Luke's are replaced.
 pub fn zoom(e: &mut Edits, first: usize, last: usize, scale: f64, reason: &str) -> Result<(), String> {
     if e.zooms.iter().any(|z| z.by == "you" && z.first <= last && z.last >= first) {
         return Err("Luke already zoomed in there; change it only if he asks, using remove_zoom first.".into());
@@ -291,7 +293,7 @@ pub fn zoom(e: &mut Edits, first: usize, last: usize, scale: f64, reason: &str) 
     e.zooms.push(Zoom {
         first,
         last,
-        scale: scale.clamp(1.05, 2.5),
+        scale: scale.clamp(1.0, 5.0),
         x: 0.5,
         y: 0.4,
         by: "agent".into(),
@@ -436,7 +438,7 @@ mod tests {
         zoom(&mut e, 3, 5, 1.3, "punchline").unwrap();
         zoom(&mut e, 4, 6, 9.0, "again").unwrap();
         assert_eq!(e.zooms.len(), 1);
-        assert_eq!(e.zooms[0].scale, 2.5);
+        assert_eq!(e.zooms[0].scale, 5.0);
         assert_eq!(unzoom(&mut e, 6, 6), 1);
         assert_eq!(e.zooms[0].status.as_deref(), Some("restored"));
         set_captions(&mut e, true, "clean");

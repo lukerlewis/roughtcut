@@ -45,8 +45,9 @@ export interface Zoom {
   by: "you" | "agent";
   status?: AgentStatus; // Claude's zooms: unreviewed until Luke keeps or removes ("restored") them
   reason?: string;
-  easeIn?: number; // seconds to zoom in at the start (0: starts zoomed in)
-  easeOut?: number; // seconds to zoom back out at the end (0: cuts back)
+  // Old projects only, before zooms became moves (see migrateZooms).
+  easeIn?: number;
+  easeOut?: number;
 }
 
 export type CaptionStyle = "bold" | "clean";
@@ -134,7 +135,10 @@ export function addClickZooms(e: Edits, words: Word[], clicks: Click[], scale = 
     let last = first;
     while (last + 1 < words.length && words[last + 1].start < b.end) last++;
     if (zooms.some((z) => z.status !== "restored" && z.first <= last && z.last >= first)) continue;
-    zooms.push({ first, last, start: b.start, end: b.end, scale, x: b.x, y: b.y, by: "you" });
+    // In quickly at the burst's start, and back out at its end.
+    const move = Math.min(0.6, (b.end - b.start) / 3);
+    zooms.push({ first, last, start: b.start, end: b.start + move, scale, x: b.x, y: b.y, by: "you" });
+    zooms.push({ first, last, start: b.end - move, end: b.end, scale: 1, x: b.x, y: b.y, by: "you" });
     added++;
   }
   if (!added) return e;
@@ -159,6 +163,8 @@ export interface Edits {
   voice?: Voice;
   /** Play every pause, start to end, as recorded. True until a rough cut tightens them. */
   keepPauses?: boolean;
+  /** Zooms are moves that hold until the next zoom (see zoomMoves); older projects are migrated. */
+  zoomMoves?: boolean;
 }
 
 export interface Decisions {
@@ -183,6 +189,7 @@ export function fromDecisions(d: Decisions): Edits {
     agent: d.cuts.map((c) => ({ first: c.from, last: c.to, reason: c.reason, status: "pending" as const })),
     user: [],
     log: [],
+    zoomMoves: true,
     ...(d.by === "none" ? { keepPauses: true } : {}),
   };
 }
@@ -484,31 +491,82 @@ export function timecode(t: number, fps = 30, frames = false): string {
 // --- Zooms ---------------------------------------------------------------
 
 export const ZOOM = { scale: 1.3, x: 0.5, y: 0.4 }; // a punch-in centred a little above the middle, on the face
-export const ZOOM_EASE = 0.25; // seconds in and out, unless Luke sets them
+export const ZOOM_MAX = 5; // 500%
 
-/** How far in a zoom is at source time t, from 0 (not at all) to 1 (its full
- *  scale), easing in over easeIn seconds and back out over easeOut. */
-export function zoomAmount(z: Pick<Zoom, "easeIn" | "easeOut">, span: [number, number], t: number): number {
-  const [a, b] = span;
-  if (t < a || t > b) return 0;
-  const [ei, eo] = [z.easeIn ?? ZOOM_EASE, z.easeOut ?? ZOOM_EASE];
-  const m = Math.min(ei > 0 ? (t - a) / ei : 1, eo > 0 ? (b - t) / eo : 1, 1);
-  return m * m * (3 - 2 * m);
+/** What the frame shows: scaled up by `scale` about the point (x, y), 0..1 of the frame. */
+export interface Frame {
+  scale: number;
+  x: number;
+  y: number;
+}
+export const FULL: Frame = { scale: 1, x: 0.5, y: 0.5 };
+
+/** A zoom is a move: over its span the frame goes from what it showed before
+ *  to the zoom's own framing, and stays there until the next zoom. So a
+ *  longer zoom moves more slowly, and a zoom at 100% zooms back out. */
+export interface ZoomMove {
+  a: number; // source seconds
+  b: number;
+  from: Frame;
+  to: Frame;
 }
 
-/** The scale to show at source time t for this zoom. */
-export function zoomScaleAt(words: Word[], z: Zoom, t: number): number {
-  return 1 + (z.scale - 1) * zoomAmount(z, zoomSpan(words, z), t);
+const isOut = (f: Frame) => f.scale <= 1.001;
+
+/** The live zooms in time order, as moves. */
+export function zoomMoves(words: Word[], zooms: Zoom[]): ZoomMove[] {
+  const sorted = zooms
+    .filter((z) => z.status !== "restored")
+    .map((z) => ({ z, span: zoomSpan(words, z) }))
+    .sort((p, q) => p.span[0] - q.span[0]);
+  let at = FULL;
+  return sorted.map(({ z, span }) => {
+    // Going to or from the full frame, only the scale changes.
+    const to = isOut(z) ? { scale: 1, x: at.x, y: at.y } : { scale: z.scale, x: z.x, y: z.y };
+    const from = isOut(at) ? { scale: 1, x: to.x, y: to.y } : at;
+    at = to;
+    return { a: span[0], b: span[1], from, to };
+  });
 }
 
-/** Sets how long a zoom takes to go in and come out. */
-export function setZoomEase(e: Edits, index: number, ease: { easeIn?: number; easeOut?: number }): Edits {
-  const z = e.zooms?.[index];
-  if (!z) return e;
-  const clamp = (v: number | undefined, old: number | undefined) => (v === undefined ? old : Math.max(0, Math.min(10, Math.round(v * 100) / 100)));
-  const next = { ...z, easeIn: clamp(ease.easeIn, z.easeIn), easeOut: clamp(ease.easeOut, z.easeOut), status: z.by === "agent" ? ("accepted" as const) : z.status };
-  const zooms = e.zooms!.map((x, i) => (i === index ? next : x));
-  return { ...e, zooms, log: [...e.log, { at: now(), by: "you", op: "zoom-ease", first: z.first, last: z.last, note: `${next.easeIn ?? ZOOM_EASE}/${next.easeOut ?? ZOOM_EASE}` }] };
+const smooth = (m: number) => m * m * (3 - 2 * m);
+
+/** The framing at source time t. */
+export function frameAt(moves: ZoomMove[], t: number): Frame {
+  let f = FULL;
+  for (const m of moves) {
+    if (t < m.a) return f;
+    if (t <= m.b) {
+      const k = m.b - m.a > 1e-6 ? smooth(Math.min(1, Math.max(0, (t - m.a) / (m.b - m.a)))) : 1;
+      return { scale: m.from.scale + (m.to.scale - m.from.scale) * k, x: m.from.x + (m.to.x - m.from.x) * k, y: m.from.y + (m.to.y - m.from.y) * k };
+    }
+    f = m.to;
+  }
+  return f;
+}
+
+/** What a new zoom starting at t should be: in, or back out if it's zoomed in there. */
+export function nextZoomScale(words: Word[], zooms: Zoom[], t: number): number {
+  return isOut(frameAt(zoomMoves(words, zooms), t)) ? ZOOM.scale : 1;
+}
+
+/** Projects from before zooms were moves: each old zoom (in, hold, out)
+ *  becomes a quick zoom in at its start and a zoom out at its end. */
+export function migrateZooms(e: Edits, words: Word[]): Edits {
+  if (e.zoomMoves) return e;
+  const old = [...(e.zooms ?? [])].sort((p, q) => zoomSpan(words, p)[0] - zoomSpan(words, q)[0]);
+  const zooms: Zoom[] = [];
+  old.forEach((z, i) => {
+    const [a, b] = zoomSpan(words, z);
+    const { easeIn, easeOut, ...rest } = z;
+    const ei = Math.min(b - a, Math.max(0.1, easeIn ?? 0.25));
+    const eo = Math.min(b - a - ei, Math.max(0.1, easeOut ?? 0.25));
+    zooms.push({ ...rest, start: a, end: a + ei });
+    const next = old[i + 1];
+    const live = (x: Zoom) => x.status !== "restored";
+    if (eo > 0.05 && !(next && live(z) && live(next) && zoomSpan(words, next)[0] < b + 0.05)) zooms.push({ ...rest, scale: 1, start: b - eo, end: b });
+  });
+  return { ...e, zooms, zoomMoves: true };
 }
 
 /** Zooms that are on screen: everything except Claude's that Luke removed. */
@@ -516,10 +574,10 @@ export function liveZooms(e: Edits): Zoom[] {
   return (e.zooms ?? []).filter((z) => z.status !== "restored");
 }
 
-/** Luke zooms in on first..last, replacing any zoom it overlaps. */
-export function addZoom(e: Edits, first: number, last: number): Edits {
+/** Luke zooms over first..last (in, or out with scale 1), replacing any zoom it overlaps. */
+export function addZoom(e: Edits, first: number, last: number, scale: number = ZOOM.scale): Edits {
   const zooms = (e.zooms ?? []).filter((z) => z.status === "restored" || z.last < first || z.first > last);
-  zooms.push({ first, last, ...ZOOM, by: "you" });
+  zooms.push({ first, last, ...ZOOM, scale, by: "you" });
   zooms.sort((a, b) => a.first - b.first);
   return { ...e, zooms, log: [...e.log, { at: now(), by: "you", op: "zoom", first, last }] };
 }
@@ -565,7 +623,8 @@ export interface Segment {
   start: number; // seconds into the recording, or into `file` when set
   end: number;
   // from/to: the whole zoom's span in the same seconds as start/end, for easing in and out
-  zoom: { scale: number; x: number; y: number; from?: number; to?: number; easeIn?: number; easeOut?: number } | null;
+  // the framing; with from/to, a move to it from `start` over those seconds (in the same seconds as start/end)
+  zoom: { scale: number; x: number; y: number; from?: number; to?: number; start?: Frame } | null;
   file?: string; // one of Claude's clips playing instead of the recording
   speed?: number; // played faster, pitch kept
   blur?: Rect[]; // boxes blurred out
@@ -574,25 +633,28 @@ export interface Segment {
 /** The kept ranges split wherever a zoom or clip starts or ends, for export.
  *  Pieces under a clip play from the clip's file. */
 export function segments(ranges: Range[], words: Word[], zooms: Zoom[], clips: Clip[] = [], folder = "", blurs: BlurFx[] = []): Segment[] {
-  const spans = zooms.map((z) => {
-    const span = zoomSpan(words, z);
-    return { span, zoom: { scale: z.scale, x: z.x, y: z.y, from: span[0], to: span[1], easeIn: z.easeIn ?? ZOOM_EASE, easeOut: z.easeOut ?? ZOOM_EASE } };
-  });
+  const moves = zoomMoves(words, zooms);
+  const still = (f: Frame) => (isOut(f) ? null : { scale: f.scale, x: f.x, y: f.y });
+  const framing = (mid: number): Segment["zoom"] => {
+    const m = moves.find((m) => m.a <= mid && mid <= m.b);
+    if (!m) return still(frameAt(moves, mid));
+    const same = Math.abs(m.from.scale - m.to.scale) < 1e-4 && Math.abs(m.from.x - m.to.x) < 1e-4 && Math.abs(m.from.y - m.to.y) < 1e-4;
+    return same ? still(m.to) : { ...m.to, from: m.a, to: m.b, start: m.from };
+  };
   const pieces: (Segment & { clip: number })[] = [];
   const live = blurs.filter((x) => x.status !== "restored");
   for (const [a, b, rate] of ranges) {
     const cuts = new Set([a, b]);
-    for (const { span } of spans) for (const t of span) if (t > a && t < b) cuts.add(t);
+    for (const m of moves) for (const t of [m.a, m.b]) if (t > a && t < b) cuts.add(t);
     for (const c of clips) for (const t of [c.start, c.end]) if (t > a && t < b) cuts.add(t);
     for (const x of live) for (const t of [x.start, x.end]) if (t > a && t < b) cuts.add(t);
     const points = [...cuts].sort((x, y) => x - y);
     for (let i = 0; i + 1 < points.length; i++) {
       const [s, t] = [points[i], points[i + 1]];
       const mid = (s + t) / 2;
-      const z = spans.find(({ span }) => span[0] <= mid && mid <= span[1]);
       const clip = clips.findIndex((c) => c.start <= mid && mid <= c.end);
       const blur = live.filter((x) => x.start <= mid && mid <= x.end).map(({ x, y, w, h }) => ({ x, y, w, h }));
-      const piece: Segment & { clip: number } = { start: s, end: t, zoom: z?.zoom ?? null, clip };
+      const piece: Segment & { clip: number } = { start: s, end: t, zoom: framing(mid), clip };
       if (rate && rate !== 1) piece.speed = rate;
       if (blur.length) piece.blur = blur;
       const last = pieces[pieces.length - 1];
@@ -766,7 +828,7 @@ export function setZoomLook(e: Edits, index: number, look: { scale?: number; x?:
   if (!z) return e;
   const next = {
     ...z,
-    scale: Math.min(3, Math.max(1.05, look.scale ?? z.scale)),
+    scale: Math.min(ZOOM_MAX, Math.max(1, look.scale ?? z.scale)),
     x: Math.min(1, Math.max(0, look.x ?? z.x)),
     y: Math.min(1, Math.max(0, look.y ?? z.y)),
     status: z.by === "agent" ? ("accepted" as const) : z.status,

@@ -74,17 +74,24 @@ fn tools() -> Value {
         },
         {
             "name": "zoom_in",
-            "description": "Punch in on words from..to: the frame scales up about a point (by default a little above the middle, on Luke's face) for exactly while those words play. Good for emphasis on a key line or to hide a jump cut. Shows to Luke as your unreviewed zoom until he keeps or removes it; he can drag it on the timeline.",
+            "description": "Zoom in over words from..to: while those words play the frame moves smoothly from what it showed before to this zoom, scaled up about a point (by default a little above the middle, on Luke's face), and it STAYS zoomed in until the next zoom. So the span sets the speed: one short word is a quick punch in, a whole sentence a slow push. To come back out, use zoom_out over a word or two later. Good for emphasis on a key line or to hide a jump cut. Shows to Luke as your unreviewed zoom until he keeps or removes it; he can drag it on the timeline.",
             "inputSchema": {
                 "type": "object",
                 "properties": range(json!({
-                    "scale": { "type": "number", "description": "How far in: 1.15 subtle, 1.3 normal (default), 1.6 strong. 1.05 to 2.5." },
+                    "scale": { "type": "number", "description": "How far in: 1.15 subtle, 1.3 normal (default), 1.6 strong, up to 5 for a detail on screen." },
                     "x": { "type": "number", "description": "Where to zoom, across: 0 left edge, 0.5 middle (default), 1 right edge." },
                     "y": { "type": "number", "description": "Where to zoom, down: 0 top, 0.4 face height (default), 1 bottom." },
-                    "ease_in": { "type": "number", "description": "Seconds to zoom in at the start. 0 starts already zoomed in; default 0.25." },
-                    "ease_out": { "type": "number", "description": "Seconds to zoom back out at the end. A few seconds makes a slow pull-out; 0 cuts straight back; default 0.25." },
                     "reason": { "type": "string", "description": "A few words on why, shown to Luke." },
                 })),
+                "required": ["from", "to", "reason"],
+            },
+        },
+        {
+            "name": "zoom_out",
+            "description": "Zoom back out to the whole frame over words from..to (a longer span is a slower pull-out). It stays out until the next zoom_in.",
+            "inputSchema": {
+                "type": "object",
+                "properties": range(json!({ "reason": { "type": "string", "description": "A few words on why, shown to Luke." } })),
                 "required": ["from", "to", "reason"],
             },
         },
@@ -229,8 +236,8 @@ fn tools() -> Value {
         },
         {
             "name": "zoom_to_clicks",
-            "description": "For videos recorded in Roughcut: zoom in where Luke clicked, one zoom per burst of clicks, for him to review.",
-            "inputSchema": { "type": "object", "properties": { "scale": { "type": "number", "description": "1.2 to 2.5, default 1.6" } } },
+            "description": "For videos recorded in Roughcut: zoom in where Luke clicked and back out after, for each burst of clicks, for him to review.",
+            "inputSchema": { "type": "object", "properties": { "scale": { "type": "number", "description": "1.2 to 5, default 1.6" } } },
         },
         {
             "name": "cut_retakes",
@@ -410,22 +417,24 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             let verb = if name == "cut_words" { "Cut" } else { "Restored" };
             Ok(format!("{verb} {a}-{b}: \"{}\". The cut is now {after:.1}s (was {before:.1}s).", text(a, b)))
         }
-        "zoom_in" | "remove_zoom" => {
+        "zoom_in" | "zoom_out" | "remove_zoom" => {
             let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
             if a > b {
                 return Err("`from` must not be after `to`".into());
             }
-            let msg = if name == "zoom_in" {
+            let msg = if name != "remove_zoom" {
                 let reason = args["reason"].as_str().filter(|r| !r.trim().is_empty()).ok_or("Give a short `reason`.")?;
-                let scale = args["scale"].as_f64().unwrap_or(1.3);
+                let scale = if name == "zoom_out" { 1.0 } else { args["scale"].as_f64().unwrap_or(1.3).clamp(1.05, 5.0) };
                 edits::zoom(&mut e, a, b, scale, reason.trim())?;
                 if let Some(z) = e.zooms.iter_mut().find(|z| z.first == a && z.by == "agent") {
                     z.x = args["x"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0);
                     z.y = args["y"].as_f64().unwrap_or(0.4).clamp(0.0, 1.0);
-                    z.ease_in = args["ease_in"].as_f64().map(|v| v.clamp(0.0, 10.0));
-                    z.ease_out = args["ease_out"].as_f64().map(|v| v.clamp(0.0, 10.0));
                 }
-                format!("Zoomed in on {a}-{b}: \"{}\" at {:.0}%.", text(a, b), scale.clamp(1.05, 2.5) * 100.0)
+                if name == "zoom_out" {
+                    format!("Zooming out over {a}-{b}: \"{}\".", text(a, b))
+                } else {
+                    format!("Zooming in over {a}-{b}: \"{}\" to {:.0}%, held until the next zoom.", text(a, b), scale * 100.0)
+                }
             } else {
                 let n = edits::unzoom(&mut e, a, b);
                 format!("Removed {n} zoom(s) around {a}-{b}.")
@@ -741,7 +750,7 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
         "zoom_to_clicks" => {
             let recording = std::env::var("ROUGHCUT_RECORDING").map_err(|_| "This only works from inside Roughcut.".to_string())?;
             let (_, info) = crate::recorder::parts(Path::new(&recording)).ok_or("This video wasn't recorded in Roughcut, so there are no clicks.")?;
-            let scale = args["scale"].as_f64().unwrap_or(1.6).clamp(1.2, 2.5);
+            let scale = args["scale"].as_f64().unwrap_or(1.6).clamp(1.2, 5.0);
             let mut added = 0;
             for (start, end, x, y) in crate::recorder::click_zooms(&info["clicks"], 3.0) {
                 let Some(first) = words.iter().position(|w| w.end > start) else { continue };
@@ -749,20 +758,24 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
                 if e.zooms.iter().any(|z| z.status.as_deref() != Some("restored") && z.first <= last && z.last >= first) {
                     continue; // leave zooms already there alone
                 }
-                e.zooms.push(edits::Zoom {
-                    first,
-                    last,
-                    scale,
-                    x,
-                    y,
-                    by: "agent".into(),
-                    status: Some("pending".into()),
-                    reason: Some("follows your clicks".into()),
-                    start: Some(start),
-                    end: Some(end),
-                    ease_in: None,
-                    ease_out: None,
-                });
+                // In quickly as the clicks start, back out as they end.
+                let quick = ((end - start) / 3.0).min(0.6);
+                for (scale, a, b) in [(scale, start, start + quick), (1.0, end - quick, end)] {
+                    e.zooms.push(edits::Zoom {
+                        first,
+                        last,
+                        scale,
+                        x,
+                        y,
+                        by: "agent".into(),
+                        status: Some("pending".into()),
+                        reason: Some("follows your clicks".into()),
+                        start: Some(a),
+                        end: Some(b),
+                        ease_in: None,
+                        ease_out: None,
+                    });
+                }
                 added += 1;
             }
             e.zooms.sort_by_key(|z| z.first);
@@ -896,14 +909,15 @@ fn describe(words: &[edits::Word], e: &edits::Edits, duration: f64) -> String {
         i = j + 1;
     }
     let live: Vec<_> = e.zooms.iter().filter(|z| z.status.as_deref() != Some("restored")).collect();
-    s += "\nZooms: ";
+    s += "\nZooms (each moves the frame over its words and holds until the next): ";
     if live.is_empty() {
         s += "none\n";
     } else {
         s += "\n";
         for z in live {
             let who = if z.by == "you" { "Luke's".to_string() } else { format!("yours, {}", z.status.as_deref().unwrap_or("pending")) };
-            s += &format!("[{}-{}] {:.0}% ({who}) {}\n", z.first, z.last, z.scale * 100.0, z.reason.as_deref().unwrap_or(""));
+            let what = if z.scale <= 1.001 { "zoom out".to_string() } else { format!("zoom in to {:.0}%", z.scale * 100.0) };
+            s += &format!("[{}-{}] {what} ({who}) {}\n", z.first, z.last, z.reason.as_deref().unwrap_or(""));
         }
     }
     s += &match &e.captions {
@@ -1012,7 +1026,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 32);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 33);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");
@@ -1038,11 +1052,14 @@ mod tests {
         assert_eq!(saved["agent"][0]["status"], "restored");
 
         let z = rpc(&dir, "tools/call", json!({ "name": "zoom_in", "arguments": { "from": 2, "to": 4, "reason": "key line" } }));
-        assert!(z["content"][0]["text"].as_str().unwrap().contains("at 130%"), "{z}");
+        assert!(z["content"][0]["text"].as_str().unwrap().contains("to 130%"), "{z}");
+        let out = rpc(&dir, "tools/call", json!({ "name": "zoom_out", "arguments": { "from": 6, "to": 6, "reason": "back out" } }));
+        assert!(out["content"][0]["text"].as_str().unwrap().contains("Zooming out over 6-6"), "{out}");
         rpc(&dir, "tools/call", json!({ "name": "set_captions", "arguments": { "on": true } }));
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("[2-4] 130% (yours, pending) key line"), "{text}");
+        assert!(text.contains("[2-4] zoom in to 130% (yours, pending) key line"), "{text}");
+        assert!(text.contains("[6-6] zoom out (yours, pending) back out"), "{text}");
         assert!(text.contains("Captions: on, bold style"), "{text}");
 
         let t = rpc(&dir, "tools/call", json!({ "name": "add_text", "arguments": { "style": "title", "text": "30 days", "from": 6, "to": 7, "reason": "the hook" } }));

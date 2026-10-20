@@ -78,7 +78,7 @@ export function effectTracks(e: Edits, words: Word[]): FxTrack[] {
   const zooms: FxItem[] = (e.zooms ?? []).flatMap((z, index) => {
     if (z.status === "restored") return [];
     const [start, end] = zoomSpan(words, z);
-    return [{ effect: { kind: "zoom", index }, start, end, label: `Zoom ${Math.round(z.scale * 100)}%`, pending: z.status === "pending", icon: "zoom" as const }];
+    return [{ effect: { kind: "zoom", index }, start, end, label: z.scale <= 1.001 ? "Zoom out" : `Zoom ${Math.round(z.scale * 100)}%`, pending: z.status === "pending", icon: "zoom" as const }];
   });
   tracks.push({ name: "Zooms", items: zooms });
   return tracks;

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { motionOf, partsOf } from "../lib/graphics";
 import { settingsOf, textsOf, type Setting } from "../lib/graphicView";
 import type { CatalogGraphic } from "../lib/backend";
-import { MOTION_DEFAULTS, TEXT_DEFAULTS, ZOOM_EASE, type Direction, type Easing, type Motion, type MotionStep, timecode, zoomSpan, type Background, type BlurFx, type Clip, type LayoutMode, type Rendered, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom, type Graphic } from "../lib/edl";
+import { MOTION_DEFAULTS, TEXT_DEFAULTS, ZOOM, ZOOM_MAX, type Direction, type Easing, type Motion, type MotionStep, timecode, zoomSpan, type Background, type BlurFx, type Clip, type LayoutMode, type Rendered, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom, type Graphic } from "../lib/edl";
 
 export type Look = { scale: number; x: number; y: number };
 
@@ -30,7 +30,6 @@ interface Props {
   onCommit: (look: Look) => void; // when the slider is let go
   onKeep: () => void;
   onRemove: () => void;
-  onZoomEase: (ease: { easeIn?: number; easeOut?: number }) => void;
   onPreview: () => void; // play the effect from just before it
   onMotionDefault: (style: TextStyle, motion: Motion) => void; // new graphics of this kind move like this
   graphic?: Graphic;
@@ -594,60 +593,6 @@ function LayoutSettings({ c, p }: { c: Clip; p: Props }) {
 }
 
 /** The settings of the effect picked on the timeline. */
-/** How long a zoom takes to go in and to come back out, with a few starting points. */
-function ZoomEase({ z, length, p }: { z: Zoom; length: number; p: Props }) {
-  const [draft, setDraft] = useState<{ easeIn?: number; easeOut?: number } | null>(null);
-  const ei = draft?.easeIn ?? z.easeIn ?? ZOOM_EASE;
-  const eo = draft?.easeOut ?? z.easeOut ?? ZOOM_EASE;
-  const max = Math.max(0.5, Math.round(length * 10) / 10);
-  const commit = () => {
-    if (draft) p.onZoomEase(draft);
-    setDraft(null);
-  };
-  const slider = (key: "easeIn" | "easeOut", label: string, value: number) => (
-    <>
-      <label className="setting">
-        <span>{label}</span>
-        <span className="mono">{value === 0 ? "instant" : `${value.toFixed(1)}s`}</span>
-      </label>
-      <input
-        type="range"
-        min={0}
-        max={max * 10}
-        value={Math.round(Math.min(value, max) * 10)}
-        onChange={(e) => setDraft({ ...draft, [key]: Number(e.target.value) / 10 })}
-        onPointerUp={commit}
-        onKeyUp={commit}
-        onBlur={commit}
-      />
-    </>
-  );
-  const full = Math.round(length * 10) / 10;
-  return (
-    <>
-      {slider("easeIn", "Zoom in over", ei)}
-      {slider("easeOut", "Zoom out over", eo)}
-      <div className="actions wrap">
-        <button className="btn" onClick={() => p.onZoomEase({ easeIn: 0, easeOut: 0 })} title="Cut straight in and straight out">
-          Punch
-        </button>
-        <button className="btn" onClick={() => p.onZoomEase({ easeIn: 0.4, easeOut: 0.4 })}>
-          Smooth
-        </button>
-        <button className="btn" onClick={() => p.onZoomEase({ easeIn: 0, easeOut: full })} title="Start zoomed in, then slowly pull out">
-          Start close
-        </button>
-        <button className="btn" onClick={() => p.onZoomEase({ easeIn: full, easeOut: 0 })} title="Slowly push in, then cut back">
-          Slow push
-        </button>
-      </div>
-      <button className="btn ghost" onClick={p.onPreview}>
-        <Play size={14} /> Play it
-      </button>
-    </>
-  );
-}
-
 /** One setting of a motion graphic: a colour, a number or some text. */
 function SettingField({ s, value, onSave }: { s: Setting; value: string | number; onSave: (v: string | number) => void }) {
   const [draft, setDraft] = useState<string | number | null>(null);
@@ -830,12 +775,12 @@ export function Effect(p: Props) {
         </p>
         <label className="setting">
           <span>Amount</span>
-          <span className="mono">{Math.round(look.scale * 100)}%</span>
+          <span className="mono">{look.scale <= 1.001 ? "100%, zoomed out" : `${Math.round(look.scale * 100)}%`}</span>
         </label>
         <input
           type="range"
-          min={105}
-          max={250}
+          min={100}
+          max={ZOOM_MAX * 100}
           step={1}
           value={Math.round(look.scale * 100)}
           onChange={(e) => p.onLook({ ...look, scale: Number(e.target.value) / 100 })}
@@ -843,19 +788,36 @@ export function Effect(p: Props) {
           onKeyUp={commit}
           onBlur={commit}
         />
-        <ZoomEase z={z} length={b - a} p={p} />
-        <label className="setting">
-          <span>Where it zooms</span>
-        </label>
-        <p className="hint">Drag the box on the video to pick the spot.</p>
         <div className="actions">
-          <button className="btn" onClick={() => preset(0.5, 0.5)}>
-            Centre
+          <button className="btn" onClick={() => p.onCommit({ ...look, scale: ZOOM.scale })} title="Zoom in to 130%">
+            Zoom in
           </button>
-          <button className="btn" onClick={() => preset(0.5, 0.4)}>
-            Face
+          <button className="btn" onClick={() => p.onCommit({ ...look, scale: 1 })} title="Go back to the whole frame">
+            Zoom out
           </button>
         </div>
+        <p className="hint">
+          It {look.scale <= 1.001 ? "zooms out" : "zooms"} over {(b - a).toFixed(1)}s and stays there until the next zoom. Drag the block's ends on the timeline: longer is slower.
+        </p>
+        {look.scale > 1.001 && (
+          <>
+            <label className="setting">
+              <span>Where it zooms</span>
+            </label>
+            <p className="hint">Drag the box on the video to pick the spot.</p>
+            <div className="actions">
+              <button className="btn" onClick={() => preset(0.5, 0.5)}>
+                Centre
+              </button>
+              <button className="btn" onClick={() => preset(0.5, 0.4)}>
+                Face
+              </button>
+            </div>
+          </>
+        )}
+        <button className="btn ghost" onClick={p.onPreview}>
+          <Play size={14} /> Play it
+        </button>
         <div className="actions">
           {z.status === "pending" && (
             <button className="btn" onClick={p.onKeep}>

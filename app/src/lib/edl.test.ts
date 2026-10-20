@@ -45,10 +45,13 @@ import {
   setNote,
   openNotes,
   findRetakes,
-  zoomAmount,
-  setZoomEase,
+  zoomMoves,
+  frameAt,
+  nextZoomScale,
+  migrateZooms,
   addRetakeCuts,
   type Edits,
+  type Zoom,
   type Word,
 } from "./edl";
 
@@ -138,9 +141,12 @@ describe("zooms", () => {
     const ranges = keptRanges(SAMPLE, keptSet(SAMPLE.length, e), 6);
     const segs = segments(ranges, SAMPLE, liveZooms(e));
     const zoomed = segs.filter((s) => s.zoom);
-    expect(zoomed).toHaveLength(1);
+    // The move over the zoom's words, then held zoomed in to the end.
     expect(zoomed[0].start).toBeCloseTo(4.2 - 0.08);
     expect(zoomed[0].end).toBeCloseTo(5.0 + 0.15);
+    expect(zoomed[0].zoom).toMatchObject({ scale: 1.3, start: { scale: 1 } });
+    expect(zoomed.slice(1).every((s) => s.zoom && s.zoom.scale === 1.3 && !s.zoom.start)).toBe(true);
+    expect(segs[segs.length - 1].zoom).toMatchObject({ scale: 1.3 });
     // Pieces still cover exactly the kept ranges.
     expect(segs.reduce((n, s) => n + s.end - s.start, 0)).toBeCloseTo(ranges.reduce((n, [a, b]) => n + b - a, 0));
   });
@@ -308,9 +314,12 @@ describe("recordings made in Roughcut", () => {
   it("zooms to each burst of clicks", () => {
     const e: Edits = { version: 1, agent: [], user: [], log: [] };
     const next = addClickZooms(e, words, [{ t: 1, x: 0.2, y: 0.2 }, { t: 2.5, x: 0.4, y: 0.4 }, { t: 10.5, x: 0.9, y: 0.1 }]);
+    const xy = { x: 0.30000000000000004, y: 0.30000000000000004 };
     expect(next.zooms).toEqual([
-      { first: 0, last: 3, start: 0.6, end: 4.5, scale: 1.6, x: 0.30000000000000004, y: 0.30000000000000004, by: "you" },
-      { first: 4, last: 5, start: 10.1, end: 12.5, scale: 1.6, x: 0.9, y: 0.1, by: "you" },
+      { first: 0, last: 3, start: 0.6, end: 1.2, scale: 1.6, ...xy, by: "you" },
+      { first: 0, last: 3, start: 3.9, end: 4.5, scale: 1, ...xy, by: "you" },
+      { first: 4, last: 5, start: 10.1, end: 10.7, scale: 1.6, x: 0.9, y: 0.1, by: "you" },
+      { first: 4, last: 5, start: 11.9, end: 12.5, scale: 1, x: 0.9, y: 0.1, by: "you" },
     ]);
     expect(addClickZooms(next, words, [{ t: 1, x: 0.5, y: 0.5 }])).toBe(next); // a zoom is already there
   });
@@ -352,27 +361,40 @@ describe("verbal markers", () => {
   });
 });
 
-describe("zooms easing in and out", () => {
-  it("eases in and out over the set times", () => {
-    const z = { easeIn: 1, easeOut: 2 };
-    expect(zoomAmount(z, [10, 20], 9)).toBe(0);
-    expect(zoomAmount(z, [10, 20], 10)).toBe(0);
-    expect(zoomAmount(z, [10, 20], 10.5)).toBeCloseTo(0.5);
-    expect(zoomAmount(z, [10, 20], 15)).toBe(1);
-    expect(zoomAmount(z, [10, 20], 19)).toBeCloseTo(0.5);
-    expect(zoomAmount(z, [10, 20], 20)).toBe(0);
+describe("zooms as moves", () => {
+  const z = (start: number, end: number, scale: number, x = 0.5, y = 0.4): Zoom => ({ first: 0, last: 0, start, end, scale, x, y, by: "you" });
+  it("moves over the block and holds until the next zoom", () => {
+    const moves = zoomMoves(SAMPLE, [z(10, 20, 2), z(30, 31, 1)]);
+    expect(frameAt(moves, 9).scale).toBe(1);
+    expect(frameAt(moves, 15).scale).toBeCloseTo(1.5); // halfway through a 10s move
+    expect(frameAt(moves, 25)).toEqual({ scale: 2, x: 0.5, y: 0.4 }); // held
+    expect(frameAt(moves, 30.5).scale).toBeCloseTo(1.5); // zooming out
+    expect(frameAt(moves, 40).scale).toBe(1);
   });
-  it("starts fully zoomed in with no ease in", () => {
-    expect(zoomAmount({ easeIn: 0, easeOut: 10 }, [10, 20], 10)).toBe(1);
-    expect(zoomAmount({ easeIn: 0, easeOut: 10 }, [10, 20], 15)).toBeCloseTo(0.5);
+  it("a longer zoom is slower", () => {
+    const quick = frameAt(zoomMoves(SAMPLE, [z(10, 11, 2)]), 10.5).scale;
+    const slow = frameAt(zoomMoves(SAMPLE, [z(10, 20, 2)]), 10.5).scale;
+    expect(quick).toBeGreaterThan(slow);
   });
-  it("is set per zoom and carried to the export", () => {
-    let e: Edits = { version: 1, agent: [], user: [], log: [], zooms: [{ first: 7, last: 10, scale: 1.5, x: 0.5, y: 0.4, by: "you" }] };
-    e = setZoomEase(e, 0, { easeIn: 0, easeOut: 3 });
-    expect(e.zooms![0]).toMatchObject({ easeIn: 0, easeOut: 3 });
-    const segs = segments([[0, 6]], SAMPLE, e.zooms!);
-    const zoomed = segs.find((s) => s.zoom);
-    expect(zoomed?.zoom).toMatchObject({ easeIn: 0, easeOut: 3 });
-    expect(zoomed?.zoom?.from).toBeCloseTo(SAMPLE[7].start - 0.08);
+  it("goes from one framing to the next", () => {
+    const moves = zoomMoves(SAMPLE, [z(0, 1, 2, 0, 0), z(5, 6, 4, 1, 1)]);
+    expect(moves[1].from).toEqual({ scale: 2, x: 0, y: 0 });
+    expect(frameAt(moves, 5.5)).toEqual({ scale: 3, x: 0.5, y: 0.5 });
+    expect(nextZoomScale(SAMPLE, [z(0, 1, 2)], 3)).toBe(1); // zoomed in there: the next one zooms out
+    expect(nextZoomScale(SAMPLE, [], 3)).toBe(1.3);
+  });
+  it("turns old zooms into a zoom in and out", () => {
+    const e: Edits = { version: 1, agent: [], user: [], log: [], zooms: [{ ...z(10, 20, 1.5), easeIn: 1, easeOut: 2 }] };
+    const next = migrateZooms(e, SAMPLE);
+    expect(next.zoomMoves).toBe(true);
+    expect(next.zooms!.map((x) => [x.start, x.end, x.scale])).toEqual([[10, 11, 1.5], [18, 20, 1]]);
+    expect(migrateZooms(next, SAMPLE)).toBe(next);
+  });
+  it("carries moves to the export", () => {
+    const segs = segments([[0, 30]], SAMPLE, [z(10, 20, 2)]);
+    expect(segs.map((s) => [s.start, s.end])).toEqual([[0, 10], [10, 20], [20, 30]]);
+    expect(segs[0].zoom).toBe(null);
+    expect(segs[1].zoom).toEqual({ scale: 2, x: 0.5, y: 0.4, from: 10, to: 20, start: { scale: 1, x: 0.5, y: 0.4 } });
+    expect(segs[2].zoom).toEqual({ scale: 2, x: 0.5, y: 0.4 });
   });
 });

@@ -89,45 +89,52 @@ pub fn waveform(path: &Path, cache: &Path) -> Result<Vec<u8>, String> {
     Ok(peaks)
 }
 
+/// What the frame shows: scaled up by `scale` about the point (x, y), 0..1 of the frame.
+#[derive(Deserialize, Clone, Copy, Default, PartialEq, Debug)]
+pub struct Frame {
+    pub scale: f64,
+    pub x: f64,
+    pub y: f64,
+}
+
 #[derive(Deserialize, Clone, Copy, Default)]
 pub struct Zoom {
     pub scale: f64,
     pub x: f64,
     pub y: f64,
-    /// The whole zoom's span, in the same seconds as the segment, and how long
-    /// it takes to ease in and out. Without them it's a straight punch-in.
+    /// A move: from `start`'s framing to this one between `from` and `to`, in
+    /// the same seconds as the segment, eased. Without them it holds still.
     #[serde(default)]
     pub from: Option<f64>,
     #[serde(default)]
     pub to: Option<f64>,
-    #[serde(default, rename = "easeIn")]
-    pub ease_in: f64,
-    #[serde(default, rename = "easeOut")]
-    pub ease_out: f64,
+    #[serde(default)]
+    pub start: Option<Frame>,
 }
 
 impl Zoom {
     /// Filters that zoom a piece starting at `a` seconds, after its timestamps
     /// start from 0 and before any speed-up.
     fn filter(&self, a: f64, width: u32, height: u32, fps: f64) -> String {
-        if self.scale <= 1.001 {
-            return String::new();
-        }
         let (x, y) = (self.x.clamp(0.0, 1.0), self.y.clamp(0.0, 1.0));
-        match (self.from, self.to) {
-            (Some(from), Some(to)) if self.ease_in > 0.001 || self.ease_out > 0.001 => {
-                // Eased: zoompan works out the zoom for each frame from its time
+        match (self.from, self.to, self.start) {
+            (Some(from), Some(to), Some(s)) if to - from > 0.001 => {
+                // zoompan works out the framing for each frame from its time
                 // (`it`, seconds into the piece). Doubling the size first keeps a
                 // slow zoom from wobbling on whole pixels.
                 let t = format!("({a:.4}+it)");
-                let fin = if self.ease_in > 0.001 { format!("clip(({t}-{from:.4})/{:.4},0,1)", self.ease_in) } else { "1".into() };
-                let fout = if self.ease_out > 0.001 { format!("clip(({to:.4}-{t})/{:.4},0,1)", self.ease_out) } else { "1".into() };
-                let m = format!("min({fin},{fout})");
+                let m = format!("clip(({t}-{from:.4})/{:.4},0,1)", to - from);
+                let k = format!("({m}*{m}*(3-2*{m}))");
+                let (sx, sy) = (s.x.clamp(0.0, 1.0), s.y.clamp(0.0, 1.0));
                 format!(
-                    ",scale=iw*2:ih*2,zoompan=z='1+{:.4}*{m}*{m}*(3-2*{m})':x='(iw-iw/zoom)*{x}':y='(ih-ih/zoom)*{y}':d=1:s={width}x{height}:fps={fps:.4}",
-                    self.scale - 1.0
+                    ",scale=iw*2:ih*2,zoompan=z='{:.4}+({:.4})*{k}':x='(iw-iw/zoom)*({sx:.4}+({:.4})*{k})':y='(ih-ih/zoom)*({sy:.4}+({:.4})*{k})':d=1:s={width}x{height}:fps={fps:.4}",
+                    s.scale.max(1.0),
+                    self.scale.max(1.0) - s.scale.max(1.0),
+                    x - sx,
+                    y - sy,
                 )
             }
+            _ if self.scale <= 1.001 => String::new(),
             // Crop the part of the frame the zoom shows, then scale it back to full size.
             _ => format!(",crop=w=iw/{k}:h=ih/{k}:x=(iw-iw/{k})*{x}:y=(ih-ih/{k})*{y},scale={width}:{height}", k = self.scale),
         }
@@ -559,7 +566,7 @@ mod tests {
         let segs = [
             Segment { start: 0.5, end: 2.0, zoom: None, file: None, speed: None, blur: vec![Rect { x: 0.1, y: 0.1, w: 0.3, h: 0.2 }] },
             // Double speed: 2s of source plays in 1s.
-            Segment { start: 2.5, end: 4.5, zoom: Some(Zoom { scale: 1.4, x: 0.5, y: 0.4, from: Some(2.5), to: Some(4.5), ease_in: 0.0, ease_out: 1.5 }), file: None, speed: Some(2.0), blur: vec![] },
+            Segment { start: 2.5, end: 4.5, zoom: Some(Zoom { scale: 1.4, x: 0.5, y: 0.4, from: Some(2.5), to: Some(4.5), start: Some(Frame { scale: 1.0, x: 0.5, y: 0.4 }) }), file: None, speed: Some(2.0), blur: vec![] },
             // A clip of Claude's, made at another size.
             Segment { start: 0.2, end: 1.2, zoom: None, file: Some(dir.join("clip.mp4").to_string_lossy().into()), speed: None, blur: vec![] },
         ];
