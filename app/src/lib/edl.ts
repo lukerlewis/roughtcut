@@ -75,7 +75,10 @@ export interface Clip {
   status?: AgentStatus; // Claude's clips: unreviewed until Luke keeps or removes ("restored") them
   reason?: string;
   background?: Background; // a swapped background, re-rendered when its settings change
+  layout?: { mode: LayoutMode }; // another screen layout, for recordings made in Roughcut
 }
+
+export type LayoutMode = "camera" | "screen" | "side";
 
 export interface Background {
   mode: "blur" | "color" | "image";
@@ -84,19 +87,57 @@ export interface Background {
   image?: string; // a picture's full path
 }
 
-/** Luke swaps the background over source seconds start..end; `file` is the rendered clip. */
-export function addBackground(e: Edits, file: string, start: number, end: number, background: Background): Edits {
-  const clips = (e.clips ?? []).map((c) => (c.status !== "restored" && c.start < end && c.end > start && c.by === "agent" ? { ...c, status: "restored" as const } : c));
-  const clip: Clip = { file, start, end, offset: 0, length: end - start, by: "you", background };
-  return { ...e, clips: [...clips, clip], log: [...e.log, { at: now(), by: "you", op: "background", note: background.mode }] };
+/** The settings a rendered clip (background or layout) is made from. */
+export type Rendered = Pick<Clip, "background" | "layout">;
+
+/** Luke adds a rendered clip over source seconds start..end; `file` is what was rendered.
+ *  Claude's clips under it are taken off, and Luke's own clips there are replaced. */
+export function addRendered(e: Edits, file: string, start: number, end: number, settings: Rendered): Edits {
+  const clips = (e.clips ?? [])
+    .filter((c) => !(c.by === "you" && c.start < end && c.end > start))
+    .map((c) => (c.status !== "restored" && c.start < end && c.end > start ? { ...c, status: "restored" as const } : c));
+  const clip: Clip = { file, start, end, offset: 0, length: end - start, by: "you", ...settings };
+  const note = settings.background?.mode ?? settings.layout?.mode ?? "";
+  return { ...e, clips: [...clips, clip], log: [...e.log, { at: now(), by: "you", op: settings.layout ? "layout" : "background", note }] };
 }
 
-/** A background clip re-rendered with new settings over its current times. */
-export function rerenderBackground(e: Edits, index: number, file: string, background: Background): Edits {
+/** A rendered clip made again with new settings, over its current times. */
+export function rerender(e: Edits, index: number, file: string, settings: Rendered): Edits {
   const c = e.clips?.[index];
   if (!c) return e;
-  const next: Clip = { ...c, file, offset: 0, length: c.end - c.start, background, status: c.by === "agent" ? "accepted" : c.status };
-  return { ...e, clips: e.clips!.map((x, i) => (i === index ? next : x)), log: [...e.log, { at: now(), by: "you", op: "edit-background", note: background.mode }] };
+  const next: Clip = { ...c, file, offset: 0, length: c.end - c.start, ...settings, status: c.by === "agent" ? "accepted" : c.status };
+  return { ...e, clips: e.clips!.map((x, i) => (i === index ? next : x)), log: [...e.log, { at: now(), by: "you", op: "rerender", note: c.file }] };
+}
+
+export interface Click {
+  t: number; // seconds into the recording
+  x: number; // fractions of the screen
+  y: number;
+}
+
+/** Zooms that follow Luke's clicks (as the Rust side's click_zooms): one per
+ *  burst, centred on its clicks, left out where a zoom already is. */
+export function addClickZooms(e: Edits, words: Word[], clicks: Click[], scale = 1.6): Edits {
+  const bursts: { start: number; end: number; x: number; y: number; n: number }[] = [];
+  for (const c of clicks) {
+    const last = bursts[bursts.length - 1];
+    if (last && c.t - last.end + 2 < 3) Object.assign(last, { end: c.t + 2, x: (last.x * last.n + c.x) / (last.n + 1), y: (last.y * last.n + c.y) / (last.n + 1), n: last.n + 1 });
+    else bursts.push({ start: Math.max(0, c.t - 0.4), end: c.t + 2, x: c.x, y: c.y, n: 1 });
+  }
+  const zooms = [...(e.zooms ?? [])];
+  let added = 0;
+  for (const b of bursts) {
+    const first = words.findIndex((w) => w.end > b.start);
+    if (first < 0) continue;
+    let last = first;
+    while (last + 1 < words.length && words[last + 1].start < b.end) last++;
+    if (zooms.some((z) => z.status !== "restored" && z.first <= last && z.last >= first)) continue;
+    zooms.push({ first, last, start: b.start, end: b.end, scale, x: b.x, y: b.y, by: "you" });
+    added++;
+  }
+  if (!added) return e;
+  zooms.sort((a, b) => a.first - b.first);
+  return { ...e, zooms, log: [...e.log, { at: now(), by: "you", op: "zoom-clicks", note: `${added}` }] };
 }
 
 export interface Edits {

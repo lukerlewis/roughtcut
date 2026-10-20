@@ -206,6 +206,20 @@ fn tools() -> Value {
             },
         },
         {
+            "name": "set_layout",
+            "description": "For videos recorded in Roughcut (get_edit lists their clicks): show words from..to as the camera full frame, the screen alone, or the two side by side, instead of the screen with the camera in the corner. Lands as a clip Luke can adjust.",
+            "inputSchema": {
+                "type": "object",
+                "properties": range(json!({ "mode": { "type": "string", "enum": ["camera", "screen", "side"] }, "reason": { "type": "string" } })),
+                "required": ["from", "to", "mode", "reason"],
+            },
+        },
+        {
+            "name": "zoom_to_clicks",
+            "description": "For videos recorded in Roughcut: zoom in where Luke clicked, one zoom per burst of clicks, for him to review.",
+            "inputSchema": { "type": "object", "properties": { "scale": { "type": "number", "description": "1.2 to 2.5, default 1.6" } } },
+        },
+        {
             "name": "remove_text",
             "description": "Take your text overlapping words from..to off the screen.",
             "inputSchema": { "type": "object", "properties": range(json!({})), "required": ["from", "to"] },
@@ -388,6 +402,52 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             edits::save(folder, &e)?;
             Ok(format!("Swapped the background over {a}-{b}. Luke will see it in blue until he reviews it."))
         }
+        "set_layout" => {
+            let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
+            if a > b {
+                return Err("`from` must not be after `to`".into());
+            }
+            let mode = args["mode"].as_str().unwrap_or("camera");
+            let reason = args["reason"].as_str().filter(|r| !r.trim().is_empty()).ok_or("Give a short `reason`.")?.trim();
+            let recording = std::env::var("ROUGHCUT_RECORDING").map_err(|_| "This only works from inside Roughcut.".to_string())?;
+            let (start, end) = (words[a].start, words[b].end);
+            let rel = crate::recorder::render_layout(folder, Path::new(&recording), start, end, mode)?;
+            edits::add_clip(&mut e, &rel, start, end, end - start, reason);
+            if let Some(c) = e.clips.last_mut() {
+                c.layout = Some(json!({ "mode": mode }));
+            }
+            edits::save(folder, &e)?;
+            Ok(format!("Set the {mode} layout over {a}-{b}. Luke will see it in blue until he reviews it."))
+        }
+        "zoom_to_clicks" => {
+            let recording = std::env::var("ROUGHCUT_RECORDING").map_err(|_| "This only works from inside Roughcut.".to_string())?;
+            let (_, info) = crate::recorder::parts(Path::new(&recording)).ok_or("This video wasn't recorded in Roughcut, so there are no clicks.")?;
+            let scale = args["scale"].as_f64().unwrap_or(1.6).clamp(1.2, 2.5);
+            let mut added = 0;
+            for (start, end, x, y) in crate::recorder::click_zooms(&info["clicks"], 3.0) {
+                let Some(first) = words.iter().position(|w| w.end > start) else { continue };
+                let last = words.iter().rposition(|w| w.start < end).unwrap_or(first).max(first);
+                if e.zooms.iter().any(|z| z.status.as_deref() != Some("restored") && z.first <= last && z.last >= first) {
+                    continue; // leave zooms already there alone
+                }
+                e.zooms.push(edits::Zoom {
+                    first,
+                    last,
+                    scale,
+                    x,
+                    y,
+                    by: "agent".into(),
+                    status: Some("pending".into()),
+                    reason: Some("follows your clicks".into()),
+                    start: Some(start),
+                    end: Some(end),
+                });
+                added += 1;
+            }
+            e.zooms.sort_by_key(|z| z.first);
+            edits::save(folder, &e)?;
+            Ok(format!("Added {added} zooms that follow Luke's clicks."))
+        }
         "remove_effect" => {
             let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
             let key = if args["kind"] == "blur" { "blurs" } else { "speeds" };
@@ -555,6 +615,14 @@ fn describe(words: &[edits::Word], e: &edits::Edits, duration: f64) -> String {
             }
         }
     }
+    if let Some((_, info)) = std::env::var("ROUGHCUT_RECORDING").ok().and_then(|r| crate::recorder::parts(Path::new(&r))) {
+        let clicks: Vec<String> = info["clicks"].as_array().into_iter().flatten().take(60).map(|c| format!("{:.1}s", c["t"].as_f64().unwrap_or(0.0))).collect();
+        s += &format!(
+            "Recorded in Roughcut: screen{}; clicks at {}. Layouts (set_layout) and zoom_to_clicks work here.\n",
+            if info["camera"]["video"] == true { " and camera" } else { "" },
+            if clicks.is_empty() { "none".into() } else { clicks.join(", ") }
+        );
+    }
     if e.other.get("voice").map(|v| v["level"] == true || v["clean"] == true) == Some(true) {
         s += "Voice: polished on export.\n";
     }
@@ -602,7 +670,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 18);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 20);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");

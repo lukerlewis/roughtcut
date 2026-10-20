@@ -1,7 +1,9 @@
-import { ArrowUp, BookOpen, Captions, EyeOff, Film, Gauge, Mic, MessageSquare, RotateCcw, Scissors, Square, Terminal, Type, User, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowUp, BookOpen, Captions, EyeOff, Film, Gauge, LayoutPanelLeft, Mic, MousePointerClick, MessageSquare, RotateCcw, Scissors, Square, Terminal, Type, User, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../lib/backend";
 import { timecode, type Word } from "../lib/edl";
+
+const LAYOUT_LABELS: Record<string, string> = { camera: "camera only", screen: "screen only", side: "side by side" };
 
 interface Props {
   messages: ChatMessage[];
@@ -85,6 +87,21 @@ function Action({ m, words, onSeekWord }: { m: ChatMessage; words: Word[]; onSee
         <span className="what">
           Swapped the background on "{span}" <span className="why">· {m.input?.reason ?? ""}</span>
         </span>
+      </div>
+    );
+  if (m.tool === "set_layout")
+    return (
+      <div className="action" onClick={() => Number.isInteger(from) && onSeekWord(from)}>
+        <LayoutPanelLeft size={13} />
+        <span className="what">
+          Changed the layout to {LAYOUT_LABELS[String(m.input?.mode)] ?? String(m.input?.mode ?? "")} on "{span}" <span className="why">· {m.input?.reason ?? ""}</span>
+        </span>
+      </div>
+    );
+  if (m.tool === "zoom_to_clicks")
+    return (
+      <div className="action quiet">
+        <MousePointerClick size={13} /> Zoomed in where you clicked
       </div>
     );
   if (m.tool === "remove_effect")

@@ -195,6 +195,20 @@ async fn swap_background(app: AppHandle, folder: String, source: String, start: 
     .map_err(|e| e.to_string())?
 }
 
+/// A Roughcut recording's parts and clicks, or null for other videos.
+#[tauri::command]
+fn recording_parts(source: String) -> Value {
+    recorder::parts(Path::new(&source)).map(|(_, info)| info).unwrap_or(Value::Null)
+}
+
+/// Renders source seconds start..end in another layout; returns the clip's path in the folder.
+#[tauri::command]
+async fn render_layout(folder: String, source: String, start: f64, end: f64, mode: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || recorder::render_layout(Path::new(&folder), Path::new(&source), start, end, &mode))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// The screens, cameras and mics Luke can record.
 #[tauri::command]
 async fn recording_sources() -> Result<Value, String> {
@@ -368,6 +382,8 @@ pub fn run() {
             stop_claude,
             load_style,
             recording_sources,
+            recording_parts,
+            render_layout,
             start_recording,
             stop_recording,
             swap_background,

@@ -23,6 +23,8 @@ import {
   type Word,
 } from "./edl";
 
+export const LAYOUT_NAMES = { camera: "Camera", screen: "Screen", side: "Side by side" } as const;
+
 const TEXT_NAMES = { title: "Title", "lower-third": "Lower third", callout: "Callout" } as const;
 
 /** The effect tracks, top to bottom: Claude's clips, text, zooms. Empty ones are left out, except zooms. */
@@ -35,9 +37,13 @@ export function effectTracks(e: Edits, words: Word[]): FxTrack[] {
           effect: { kind: "clip", index },
           start: c.start,
           end: c.end,
-          label: c.background ? `Background: ${c.background.mode === "blur" ? "blurred" : c.background.mode === "color" ? "colour" : "picture"}` : c.reason || c.file.split("/").pop() || "Clip",
+          label: c.layout
+            ? `Layout: ${LAYOUT_NAMES[c.layout.mode]}`
+            : c.background
+              ? `Background: ${c.background.mode === "blur" ? "blurred" : c.background.mode === "color" ? "colour" : "picture"}`
+              : c.reason || c.file.split("/").pop() || "Clip",
           pending: c.status === "pending",
-          icon: c.background ? ("layout" as const) : ("film" as const),
+          icon: c.layout || c.background ? ("layout" as const) : ("film" as const),
           bounds: [c.start - c.offset, c.start - c.offset + c.length] as [number, number],
         }],
   );

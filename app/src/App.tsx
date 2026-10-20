@@ -1,4 +1,4 @@
-import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, EyeOff, Gauge, MessageSquarePlus, Mic, Plus, User, ZoomIn, Scissors, SkipBack, Type } from "lucide-react";
+import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, EyeOff, Gauge, LayoutPanelLeft, MessageSquarePlus, MousePointerClick, Mic, Plus, User, ZoomIn, Scissors, SkipBack, Type } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
@@ -18,9 +18,10 @@ import {
   acceptAll,
   addText,
   addNote,
-  addBackground,
-  rerenderBackground,
-  type Background,
+  addRendered,
+  rerender,
+  addClickZooms,
+  type Rendered,
   addSpeed,
   addBlur,
   setTimed,
@@ -88,6 +89,7 @@ export default function App() {
   const [edits, setEdits] = useState<Edits | null>(null);
   const history = useRef<{ undo: Edits[]; redo: Edits[] }>({ undo: [], redo: [] });
   const [peaks, setPeaks] = useState<Uint8Array | null>(null);
+  const [parts, setParts] = useState<backend.RecordingParts | null>(null); // screen, camera and clicks, for recordings made here
   const [selection, setSelection] = useState<Selection | null>(null);
   const [focus, setFocus] = useState(-1);
   const [state, setState] = useState<PlayerState>({ playing: false, time: 0, source: 0 });
@@ -123,6 +125,7 @@ export default function App() {
       setChat((await backend.loadChat(opened.folder).catch(() => null)) ?? { session: null, messages: [] });
       setProject({ source: path, folder: opened.folder, url, info, words: loaded.words, summary: loaded.decisions.summary ?? "" });
       setPhase({ kind: "ready" });
+      backend.recordingParts(path).then(setParts, () => setParts(null));
       backend.waveform(path, opened.folder).then(setPeaks, () => setPeaks(null));
     } catch (e) {
       setPhase({ kind: "error", message: String(e) });
@@ -478,23 +481,33 @@ export default function App() {
   // Background swap: rendered on the Mac by a small helper, then played as a clip.
   const [rendering, setRendering] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const renderKind = useRef<"layout" | "background">("background");
   useEffect(() => {
     const off = backend.listen<number>("background-progress", (p) => setRendering(p));
     return () => void off.then((f) => f());
   }, []);
-  const renderBackground = async (bg: Background, at: { start: number; end: number; index?: number }) => {
+  // Layouts (for recordings made in Roughcut) are rendered the same way, with FFmpeg.
+  const renderClip = async (settings: Rendered, at: { start: number; end: number; index?: number }) => {
     if (!project || rendering !== null) return;
     player.current?.pause();
     setRendering(0);
+    renderKind.current = settings.layout ? "layout" : "background";
     try {
-      const file = await backend.swapBackground(project.folder, project.source, at.start, at.end, bg);
+      const file = settings.layout
+        ? await backend.renderLayout(project.folder, project.source, at.start, at.end, settings.layout.mode)
+        : await backend.swapBackground(project.folder, project.source, at.start, at.end, settings.background!);
       if (at.index === undefined) {
-        const index = edits?.clips?.length ?? 0;
-        change((x) => addBackground(x, file, at.start, at.end, bg));
-        setTimeout(() => pickEffect({ kind: "clip", index }), 0);
+        change((x) => addRendered(x, file, at.start, at.end, settings));
+        setTimeout(() =>
+          setEdits((cur) => {
+            const index = cur?.clips?.findIndex((c) => c.file === file && c.start === at.start) ?? -1;
+            if (index >= 0) pickEffect({ kind: "clip", index });
+            return cur;
+          }),
+        );
       } else {
         const i = at.index;
-        change((x) => rerenderBackground(x, i, file, bg));
+        change((x) => rerender(x, i, file, settings));
       }
     } catch (e) {
       setNotice(String(e).replace(/^Error: /, ""));
@@ -504,8 +517,18 @@ export default function App() {
   };
   const newBackground = () => {
     const span = spanForNew();
-    if (span && span[1] - span[0] > 0.1) void renderBackground({ mode: "blur", strength: 30 }, { start: span[0], end: span[1] });
+    if (span && span[1] - span[0] > 0.1) void renderClip({ background: { mode: "blur", strength: 30 } }, { start: span[0], end: span[1] });
     setSelection(null);
+  };
+  const newLayout = () => {
+    const span = spanForNew();
+    if (!parts?.camera?.video || !parts.screen) return setNotice("Layouts work on videos you record in Roughcut, with your screen and camera.");
+    if (span && span[1] - span[0] > 0.1) void renderClip({ layout: { mode: "camera" } }, { start: span[0], end: span[1] });
+    setSelection(null);
+  };
+  const zoomToClicks = () => {
+    if (!parts?.clicks.length) return setNotice("There are no clicks to follow: they're saved when you record your screen in Roughcut.");
+    change((x) => addClickZooms(x, words, parts.clicks));
   };
 
   // Speed-ups and blurs: over the selected words, or a few seconds from the playhead.
@@ -635,6 +658,9 @@ export default function App() {
       } else if (!mod && e.key.toLowerCase() === "g") {
         e.preventDefault();
         newBackground();
+      } else if (!mod && e.key.toLowerCase() === "l") {
+        e.preventDefault();
+        newLayout();
       } else if (!mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
         newTimed("blur");
@@ -758,6 +784,8 @@ export default function App() {
             { label: "Speed-up", icon: <Gauge size={14} />, key: "S", onClick: () => newTimed("speed") },
             { label: "Blur", icon: <EyeOff size={14} />, key: "B", onClick: () => newTimed("blur") },
             { label: "Background", icon: <User size={14} />, key: "G", onClick: newBackground },
+            { label: "Layout", icon: <LayoutPanelLeft size={14} />, key: "L", disabled: !parts?.camera?.video, onClick: newLayout },
+            { label: "Zoom to my clicks", icon: <MousePointerClick size={14} />, disabled: !parts?.clicks.length, onClick: zoomToClicks },
           ]}
         />
         <Menu
@@ -798,7 +826,7 @@ export default function App() {
       <div className="main">
         <div className="panel">
           <div className="panel-head">
-            Transcript <span className="meta">Select words, then ⌫ cut, Z zoom, S speed up, B blur, G background.</span>
+            Transcript <span className="meta">Select words, then ⌫ cut, Z zoom, S speed up, B blur, G background, L layout.</span>
           </div>
           <Transcript
             words={words}
@@ -868,9 +896,10 @@ export default function App() {
                   style={{ left: `${box.left * 100}%`, top: `${box.top * 100}%`, width: `${box.size * 100}%`, height: `${box.size * 100}%` }}
                 />
               )}
-              {(notice || (rendering !== null && !pickedClip?.background)) && (
+              {(notice || (rendering !== null && !pickedClip?.background && !pickedClip?.layout)) && (
                 <div className="toast" onClick={() => setNotice(null)}>
-                  {notice ?? `Cutting you out of the background… ${Math.round((rendering ?? 0) * 100)}%`}
+                  {notice ??
+                    (renderKind.current === "layout" ? "Making the layout…" : `Cutting you out of the background… ${Math.round((rendering ?? 0) * 100)}%`)}
                 </div>
               )}
               {cue && !showingRemoved && (
@@ -932,7 +961,7 @@ export default function App() {
               clip={pickedClip}
               text={pickedText}
               onText={(patch) => effect && change((x) => setText(x, effect.index, patch))}
-              onBackground={(bg) => effect && pickedClip && void renderBackground(bg, { start: pickedClip.start, end: pickedClip.end, index: effect.index })}
+              onRender={(settings) => effect && pickedClip && void renderClip(settings, { start: pickedClip.start, end: pickedClip.end, index: effect.index })}
               onChooseImage={backend.chooseImage}
               rendering={rendering}
               speed={pickedSpeed}
@@ -1013,8 +1042,8 @@ export default function App() {
           change((x) => moveEffect(x, words, fx, start, end, mode));
           // A background stretched past what was rendered is rendered again.
           const c = fx.kind === "clip" ? edits.clips?.[fx.index] : undefined;
-          if (c?.background && (start < c.start - c.offset - 0.01 || end > c.start - c.offset + c.length + 0.01))
-            void renderBackground(c.background, { start, end, index: fx.index });
+          if ((c?.background || c?.layout) && (start < c.start - c.offset - 0.01 || end > c.start - c.offset + c.length + 0.01))
+            void renderClip({ background: c.background, layout: c.layout }, { start, end, index: fx.index });
         }}
         pins={(edits.notes ?? []).map((n, index) => ({ index, at: n.at, done: !!n.done, forClaude: n.by === "you" }))}
         onPin={(index) => pickEffect({ kind: "note", index })}

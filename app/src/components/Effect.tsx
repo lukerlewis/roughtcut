@@ -1,6 +1,6 @@
-import { Check, EyeOff, Film, Gauge, ImageIcon, MessageSquare, Send, Trash2, Type, User, X, ZoomIn } from "lucide-react";
+import { Check, EyeOff, Film, Gauge, ImageIcon, LayoutPanelLeft, MessageSquare, Send, Trash2, Type, User, X, ZoomIn } from "lucide-react";
 import { useEffect, useState } from "react";
-import { TEXT_DEFAULTS, timecode, zoomSpan, type Background, type BlurFx, type Clip, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
+import { TEXT_DEFAULTS, timecode, zoomSpan, type Background, type BlurFx, type Clip, type LayoutMode, type Rendered, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
 
 export type Look = { scale: number; x: number; y: number };
 
@@ -10,7 +10,7 @@ interface Props {
   clip?: Clip;
   text?: TextFx;
   onText: (patch: Partial<TextFx>) => void; // saved as one change
-  onBackground: (b: Background) => void; // re-render with these settings
+  onRender: (settings: Rendered) => void; // re-render with these settings
   onChooseImage: () => Promise<string | null>;
   rendering: number | null; // progress of a background being rendered
   speed?: SpeedFx;
@@ -346,7 +346,7 @@ function BackgroundSettings({ c, p }: { c: Clip; p: Props }) {
       ) : (
         changed && (
           <div className="actions">
-            <button className="btn" disabled={!ready} onClick={() => p.onBackground(b)}>
+            <button className="btn" disabled={!ready} onClick={() => p.onRender({ background: b })}>
               Apply
             </button>
           </div>
@@ -358,8 +358,47 @@ function BackgroundSettings({ c, p }: { c: Clip; p: Props }) {
   );
 }
 
+const LAYOUTS: [LayoutMode, string][] = [
+  ["camera", "Camera"],
+  ["screen", "Screen"],
+  ["side", "Side by side"],
+];
+
+function LayoutSettings({ c, p }: { c: Clip; p: Props }) {
+  return (
+    <div className="panel-body effect">
+      <div className="effect-head">
+        <LayoutPanelLeft size={15} /> <span>Layout</span>
+        {c.status === "pending" && <span className="dot" title="Claude's, not reviewed yet" />}
+      </div>
+      <p className="why">
+        {c.reason && (
+          <>
+            {c.reason}
+            <br />
+          </>
+        )}
+        <span className="mono">
+          {timecode(c.start, 30, true)} to {timecode(c.end, 30, true)}
+        </span>
+      </p>
+      <div className="seg wide">
+        {LAYOUTS.map(([m, label]) => (
+          <button key={m} className={c.layout?.mode === m ? "on" : ""} disabled={p.rendering !== null} onClick={() => c.layout?.mode !== m && p.onRender({ layout: { mode: m } })}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {p.rendering !== null && <p className="hint">Making the layout…</p>}
+      <p className="hint">Elsewhere the video shows your screen with the camera in the corner. Drag the block's ends to change where this layout shows.</p>
+      <Status pending={c.status === "pending"} onKeep={p.onKeep} onRemove={p.onRemove} what="layout" />
+    </div>
+  );
+}
+
 /** The settings of the effect picked on the timeline. */
 export function Effect(p: Props) {
+  if (p.clip?.layout) return <LayoutSettings c={p.clip} p={p} />;
   if (p.clip?.background) return <BackgroundSettings c={p.clip} p={p} />;
   if (p.speed) return <SpeedSettings x={p.speed} p={p} />;
   if (p.blur) return <BlurSettings x={p.blur} p={p} />;

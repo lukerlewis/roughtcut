@@ -37,6 +37,8 @@ import {
   setText,
   removeText,
   addNote,
+  addClickZooms,
+  addRendered,
   addSpeed,
   applySpeeds,
   removeTimed,
@@ -293,5 +295,26 @@ describe("speed-ups and blurs", () => {
     expect(e.speeds).toEqual([{ start: 4, end: 8, rate: 2, by: "you" }]);
     const c: Edits = { ...e, speeds: [{ ...e.speeds![0], by: "agent", status: "pending" }] };
     expect(removeTimed(c, "speeds", 0).speeds![0].status).toBe("restored");
+  });
+});
+
+describe("recordings made in Roughcut", () => {
+  const words = w([["a", 0, 1], ["b", 1, 2], ["c", 2, 3], ["d", 3, 4], ["e", 10, 11], ["f", 11, 12]]);
+
+  it("zooms to each burst of clicks", () => {
+    const e: Edits = { version: 1, agent: [], user: [], log: [] };
+    const next = addClickZooms(e, words, [{ t: 1, x: 0.2, y: 0.2 }, { t: 2.5, x: 0.4, y: 0.4 }, { t: 10.5, x: 0.9, y: 0.1 }]);
+    expect(next.zooms).toEqual([
+      { first: 0, last: 3, start: 0.6, end: 4.5, scale: 1.6, x: 0.30000000000000004, y: 0.30000000000000004, by: "you" },
+      { first: 4, last: 5, start: 10.1, end: 12.5, scale: 1.6, x: 0.9, y: 0.1, by: "you" },
+    ]);
+    expect(addClickZooms(next, words, [{ t: 1, x: 0.5, y: 0.5 }])).toBe(next); // a zoom is already there
+  });
+
+  it("replaces Luke's own layout and takes off Claude's clip under a new one", () => {
+    let e: Edits = { version: 1, agent: [], user: [], log: [], clips: [{ file: "c.mp4", start: 1, end: 3, offset: 0, length: 2, by: "agent", status: "pending" }] };
+    e = addRendered(e, "l1.mp4", 2, 5, { layout: { mode: "camera" } });
+    e = addRendered(e, "l2.mp4", 4, 6, { layout: { mode: "side" } });
+    expect(e.clips!.map((c) => [c.file, c.status ?? ""])).toEqual([["c.mp4", "restored"], ["l2.mp4", ""]]);
   });
 });

@@ -343,3 +343,29 @@ export async function startRecording(screen: string | null, camera: string | nul
 export async function stopRecording(): Promise<void> {
   if (inApp) await invoke("stop_recording");
 }
+
+export interface RecordingParts {
+  screen?: { file: string; start: number; width: number; height: number };
+  camera?: { file: string; start: number; video: boolean };
+  clicks: { t: number; x: number; y: number }[];
+}
+
+/** The parts of a video recorded in Roughcut (screen, camera, clicks), or null. */
+export async function recordingParts(source: string): Promise<RecordingParts | null> {
+  if (!inApp)
+    return {
+      screen: { file: "screen.mov", start: 0, width: 1920, height: 1080 },
+      camera: { file: "camera.mov", start: 0, video: true },
+      clicks: [{ t: 4.2, x: 0.3, y: 0.35 }, { t: 5.1, x: 0.34, y: 0.4 }, { t: 40.5, x: 0.7, y: 0.3 }],
+    };
+  return invoke<RecordingParts | null>("recording_parts", { source });
+}
+
+/** Renders source seconds start..end in another layout; returns the clip's path in the folder. */
+export async function renderLayout(folder: string, source: string, start: number, end: number, mode: string): Promise<string> {
+  if (!inApp) {
+    await new Promise((r) => setTimeout(r, 300));
+    return "clips/bw.webm";
+  }
+  return invoke<string>("render_layout", { folder, source, start, end, mode });
+}
