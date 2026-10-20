@@ -210,3 +210,35 @@ export async function onDrop(fn: (paths: string[]) => void): Promise<() => void>
     if (e.payload.type === "drop") fn(e.payload.paths);
   });
 }
+
+export interface UpdateState {
+  keySet: boolean;
+  current: number;
+  available: { build: number; notes: string } | null;
+}
+
+/** Whether a newer build is waiting (see update.rs). In a browser it
+ *  pretends, so the UI can be worked on. */
+export async function checkUpdate(): Promise<UpdateState> {
+  if (!inApp) {
+    const keySet = localStorage.getItem("roughcut-update-key") === "1";
+    return { keySet, current: 1, available: keySet ? { build: 2, notes: "Editor: zoom-ins and captions" } : null };
+  }
+  return invoke("check_update");
+}
+
+export async function setUpdateKey(key: string): Promise<void> {
+  if (!inApp) return void localStorage.setItem("roughcut-update-key", key ? "1" : "");
+  return invoke("set_update_key", { key });
+}
+
+/** Downloads the newer build; the app restarts into it when it's done. */
+export async function installUpdate(): Promise<void> {
+  if (!inApp) return new Promise((r) => setTimeout(r, 1500));
+  return invoke("install_update");
+}
+
+export async function openUrl(url: string): Promise<void> {
+  if (!inApp) return void window.open(url, "_blank");
+  return invoke("open_url", { url });
+}

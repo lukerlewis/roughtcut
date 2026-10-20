@@ -9,6 +9,7 @@ mod mcp;
 mod media;
 mod server;
 mod tools;
+mod update;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -194,9 +195,46 @@ fn video_url(server: tauri::State<server::Server>, path: String) -> String {
     server.url(Path::new(&path))
 }
 
+/// Opens a GitHub page in the browser (the update key steps link there).
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://github.com/") {
+        return Err("Only GitHub links open from here.".into());
+    }
+    tools::command("open").arg(url).status().map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn reveal(path: String) -> Result<(), String> {
     tools::reveal(Path::new(&path))
+}
+
+/// Whether there's a newer build to install (see update.rs).
+#[tauri::command]
+async fn check_update(app: tauri::AppHandle) -> Result<Value, String> {
+    let current = update::build_number(&app.package_info().version.to_string());
+    let found = tauri::async_runtime::spawn_blocking(move || update::check(current)).await.map_err(|e| e.to_string())??;
+    Ok(serde_json::json!({ "keySet": update::key().is_some(), "current": current, "available": found }))
+}
+
+#[tauri::command]
+async fn set_update_key(key: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || update::set_key(&key)).await.map_err(|e| e.to_string())?
+}
+
+/// Downloads the newer build, swaps it in and restarts into it.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let current = update::build_number(&app.package_info().version.to_string());
+    let target = tauri::async_runtime::spawn_blocking(move || {
+        let found = update::check(current)?.ok_or("You're already on the newest build.")?;
+        update::install(&found)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    update::relaunch(&target);
+    app.exit(0);
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -239,7 +277,11 @@ pub fn run() {
             ask_claude,
             stop_claude,
             load_chat,
-            save_chat
+            save_chat,
+            check_update,
+            set_update_key,
+            install_update,
+            open_url
         ])
         .build(tauri::generate_context!())
         .expect("error while starting Roughcut")

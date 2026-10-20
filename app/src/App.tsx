@@ -4,6 +4,7 @@ import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
 import { Timeline } from "./components/Timeline";
 import { Transcript, type Selection } from "./components/Transcript";
+import { Updates } from "./components/Updates";
 import * as backend from "./lib/backend";
 import { captionStrips } from "./lib/captions";
 import {
@@ -323,6 +324,8 @@ export default function App() {
       <div className="app" style={{ gridTemplateRows: "44px 1fr" }}>
         <div className="toolbar" data-tauri-drag-region>
           <span className="title">Roughcut</span>
+          <span className="spacer" data-tauri-drag-region />
+          <Updates />
         </div>
         <div
           className="empty"
@@ -363,6 +366,7 @@ export default function App() {
         </span>
         <span className="sub">{saved > 0 ? `${Math.round((saved / project.info.duration) * 100)}% shorter` : ""}</span>
         <span className="spacer" data-tauri-drag-region />
+        <Updates />
         <div className="seg" title="Captions">
           <button className={!captions.on ? "on" : ""} onClick={() => change((x) => setCaptions(x, { ...captions, on: false }))}>
             <CaptionsIcon size={15} /> Off

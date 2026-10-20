@@ -20,6 +20,8 @@ jobs:
 
   build:
     runs-on: macos-latest
+    permissions:
+      contents: write # to publish each build as a private release for the app's updater
     defaults:
       run:
         working-directory: app
@@ -38,7 +40,8 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - run: npx tauri build --bundles app,dmg
+      # The build number is the version's last part, so the app can tell when a newer build exists.
+      - run: npx tauri build --bundles app,dmg --config '{"version":"0.1.${{ github.run_number }}"}'
       # Ad-hoc signed, so macOS offers "Open Anyway" instead of calling a download "damaged".
       - name: Check the app is signed
         run: codesign --verify --deep --strict --verbose=2 src-tauri/target/release/bundle/macos/Roughcut.app
@@ -46,6 +49,15 @@ jobs:
         run: |
           cd src-tauri/target/release/bundle/macos
           ditto -c -k --keepParent Roughcut.app Roughcut.zip
+      # Roughcut's "Update" button installs the latest release (see src-tauri/src/update.rs).
+      - name: Publish the build
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" \
+            src-tauri/target/release/bundle/macos/Roughcut.zip src-tauri/target/release/bundle/dmg/*.dmg \
+            --title "Build ${{ github.run_number }}" --notes "$(git log -1 --pretty=%s)" --target "$GITHUB_SHA"
       - uses: actions/upload-artifact@v4
         with:
           name: Roughcut-mac

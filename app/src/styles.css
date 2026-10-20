@@ -234,10 +234,21 @@ button.action:hover { background: var(--muted); }
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: grid; place-items: center; z-index: 10;
   animation: fade 200ms var(--ease);
 }
-.sheet .card { width: 380px; border-radius: 14px; border: 1px solid var(--stroke); background: var(--sidebar); padding: 20px; }
+.sheet .card { width: 420px; border-radius: 14px; border: 1px solid var(--stroke); background: var(--sidebar); padding: 20px; }
 .sheet h2 { font-size: 15px; letter-spacing: -0.04em; font-weight: 500; color: var(--ink); margin: 0 0 6px; }
 .bar { height: 6px; border-radius: 3px; background: var(--muted); overflow: hidden; margin: 14px 0; }
 .bar > div { height: 100%; background: var(--foreground); transition: width 160ms linear; }
+.bar.indeterminate > div { width: 30%; animation: slide 1.2s var(--ease) infinite; }
+@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+.sheet .card .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.sheet .steps { margin: 10px 0 14px; padding-left: 18px; color: var(--subtle-foreground); font-size: 13px; line-height: 1.6; }
+.sheet .steps a { color: var(--foreground); text-decoration: underline; text-underline-offset: 3px; }
+.field {
+  width: 100%; height: 32px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--stroke); background: var(--card);
+  color: var(--foreground); font-size: 12px; outline: none;
+}
+.field:focus { border-color: var(--grey-600); }
+.field::placeholder { color: var(--disabled); }
 @keyframes fade { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } .btn:active { transform: none; } }
 
