@@ -53,7 +53,10 @@ jobs:
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       # Small native helpers (background swap, recorder), copied into the app next to Roughcut.
       - name: Build the native helpers
-        run: swift build -c release --package-path helpers --arch arm64 --arch x86_64
+        run: |
+          swift build -c release --package-path helpers --arch arm64 --arch x86_64
+          # Built on Intel they come out unsigned; sign them (ad hoc) like the app.
+          codesign --force -s - helpers/.build/apple/Products/Release/roughcut-matte helpers/.build/apple/Products/Release/roughcut-recorder
       - name: Check the background swap works
         run: |
           ffmpeg -v error -f lavfi -i testsrc2=size=640x360:rate=30 -f lavfi -i sine=frequency=440 -t 2 -c:v libx264 -pix_fmt yuv420p -c:a aac -y "$RUNNER_TEMP/in.mp4"
