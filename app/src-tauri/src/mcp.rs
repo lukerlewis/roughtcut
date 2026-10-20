@@ -151,6 +151,11 @@ fn tools() -> Value {
             },
         },
         {
+            "name": "add_rule",
+            "description": "Save one of Luke's editing rules for all his videos, when he says to always or never do something. One line, in his voice (\"Keep 'so' at the start of sentences\"). He can switch it off or edit it in Style.",
+            "inputSchema": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] },
+        },
+        {
             "name": "remove_text",
             "description": "Take your text overlapping words from..to off the screen.",
             "inputSchema": { "type": "object", "properties": range(json!({})), "required": ["from", "to"] },
@@ -282,6 +287,10 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             edits::add_text(&mut e, style, text.trim(), args["sub"].as_str(), start, end, place, reason.trim());
             edits::save(folder, &e)?;
             Ok(format!("Added a {style} \"{}\" over {a}-{b} ({start:.2}-{end:.2}s). Luke will see it in blue until he reviews it.", text.trim()))
+        }
+        "add_rule" => {
+            let text = args["text"].as_str().filter(|t| !t.trim().is_empty()).ok_or("Give the rule's `text`.")?;
+            Ok(if crate::style::add_rule(text, "agent")? { format!("Saved the rule: {}", text.trim()) } else { "Luke already has that rule.".into() })
         }
         "resolve_note" => {
             let i = args["note"].as_u64().ok_or("`note` must be a note number")? as usize;
@@ -455,7 +464,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 12);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 13);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");
@@ -492,6 +501,13 @@ mod tests {
         assert_eq!(r["content"][0]["text"], "Marked note 0 done.");
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         assert!(edit["content"][0]["text"].as_str().unwrap().contains("note 0 at 1.50s, near word 3 (yours, for Luke): Retake?"), "{edit}");
+
+        std::env::set_var("ROUGHCUT_STYLE", dir.join("style.json"));
+        let r = rpc(&dir, "tools/call", json!({ "name": "add_rule", "arguments": { "text": "Keep 'so' at the start" } }));
+        assert!(r["content"][0]["text"].as_str().unwrap().starts_with("Saved the rule"), "{r}");
+        let again = rpc(&dir, "tools/call", json!({ "name": "add_rule", "arguments": { "text": "keep 'so' at the start" } }));
+        assert_eq!(again["content"][0]["text"], "Luke already has that rule.");
+        assert!(crate::style::corrections(&dir).unwrap().contains("Luke put it back"));
 
         let bad = rpc(&dir, "tools/call", json!({ "name": "cut_words", "arguments": { "from": 3, "to": 99, "reason": "x" } }));
         assert_eq!(bad["isError"], true);

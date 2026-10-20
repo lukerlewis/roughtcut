@@ -13,7 +13,7 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct Running(pub Mutex<Option<Child>>);
 
-pub const TOOLS: [&str; 12] = [
+pub const TOOLS: [&str; 13] = [
     "mcp__roughcut__get_edit",
     "mcp__roughcut__cut_words",
     "mcp__roughcut__restore_words",
@@ -26,6 +26,7 @@ pub const TOOLS: [&str; 12] = [
     "mcp__roughcut__remove_text",
     "mcp__roughcut__resolve_note",
     "mcp__roughcut__add_note",
+    "mcp__roughcut__add_rule",
 ];
 
 /// Built-in tools for making clips: FFmpeg and Python to render them, and
@@ -49,6 +50,8 @@ fn brief(recording: &str) -> String {
          Never change or delete the recording or any file outside clips/. You can't add music yet: say so plainly if asked.\n\n\
          Luke can pin notes to moments; get_edit lists them. When he sends you notes, deal with each one, then mark it done \
          with resolve_note and a short reply. To point something out for him to decide, leave a note with add_note.\n\n\
+         When Luke says to always or never do something in his videos, save it as a rule with add_rule (in his voice, one line), \
+         then apply it here too.\n\n\
          Don't re-cut anything he restored unless he asks. Luke isn't technical: reply in a sentence or two of plain \
          English, and give times like 00:12 so he can find things."
     )
@@ -74,7 +77,7 @@ pub fn ask(
         .args(["-p", "--model", "opus", "--output-format", "stream-json", "--verbose", "--tools", "Bash,Read"])
         .args(["--strict-mcp-config", "--mcp-config", &mcp.to_string()])
         .args(["--allowedTools", &[&TOOLS[..], &MAKING[..]].concat().join(",")])
-        .args(["--append-system-prompt", &brief(recording)]);
+        .args(["--append-system-prompt", &format!("{}\n\n{}", brief(recording), crate::style::rules_text(&crate::style::load()))]);
     if let Some(id) = resume {
         cmd.args(["--resume", id]);
     }

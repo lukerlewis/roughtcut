@@ -8,6 +8,7 @@ mod edits;
 mod mcp;
 mod media;
 mod server;
+mod style;
 mod tools;
 mod update;
 
@@ -61,9 +62,20 @@ async fn run_rough_cut(app: AppHandle, path: String, cut: bool) -> Result<String
         let cli = tools::roughcut_cli().ok_or(
             "Can't find the roughcut command. Run the setup in your Roughcut folder first (bash scripts/setup-mac.sh).",
         )?;
-        let mut child = tools::command(&cli)
-            .args(["cut", &path, "--no-preview"])
-            .args(if cut { None } else { Some("--transcribe-only") })
+        let style = style::load();
+        let mut cmd = tools::command(&cli);
+        cmd.args(["cut", &path, "--no-preview"]);
+        if cut {
+            // Luke's settings and rules shape the rough cut too.
+            cmd.args(style::cut_args(&style));
+            let rules = style::rules_text(&style);
+            if !rules.is_empty() {
+                cmd.env("ROUGHCUT_CLAUDE_ARGS", format!("--append-system-prompt {}", style::shell_quote(&rules)));
+            }
+        } else {
+            cmd.arg("--transcribe-only");
+        }
+        let mut child = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -165,6 +177,23 @@ async fn ask_claude(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Luke's rules and settings, the same for every video.
+#[tauri::command]
+fn load_style() -> Value {
+    style::load()
+}
+
+#[tauri::command]
+fn save_style(style: Value) -> Result<(), String> {
+    style::save(&style)
+}
+
+/// Rules Claude suggests from what Luke corrected in this project.
+#[tauri::command]
+async fn suggest_rules(folder: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || style::suggest(Path::new(&folder))).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -278,6 +307,9 @@ pub fn run() {
             video_url,
             ask_claude,
             stop_claude,
+            load_style,
+            save_style,
+            suggest_rules,
             load_chat,
             save_chat,
             check_update,

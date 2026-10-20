@@ -2,6 +2,7 @@ import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, MessageSqu
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
+import { Style } from "./components/Style";
 import { Effect, type Look } from "./components/Effect";
 import { Timeline, type Effect as Picked } from "./components/Timeline";
 import { Transcript, type Selection } from "./components/Transcript";
@@ -81,7 +82,7 @@ export default function App() {
   const [state, setState] = useState<PlayerState>({ playing: false, time: 0, source: 0 });
   const [exporting, setExporting] = useState<{ progress: number; dest: string; done: boolean; error?: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [tab, setTab] = useState<"changes" | "chat" | "effect">("changes");
+  const [tab, setTab] = useState<"changes" | "chat" | "effect" | "style">("changes");
   const [effect, setEffect] = useState<Picked | null>(null); // the zoom or clip whose settings show
   const [look, setLook] = useState<Look | null>(null); // a zoom change being dragged, not yet saved
   const [chat, setChat] = useState<backend.Chat>({ session: null, messages: [] });
@@ -720,6 +721,9 @@ export default function App() {
             <button className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}>
               Ask Claude {asking && <span className="pulse" />}
             </button>
+            <button className={tab === "style" ? "on" : ""} onClick={() => setTab("style")}>
+              Style
+            </button>
             {pickedAny && (
               <button className={tab === "effect" ? "on" : ""} onClick={() => setTab("effect")}>
                 Effect
@@ -732,7 +736,9 @@ export default function App() {
               </button>
             )}
           </div>
-          {tab === "effect" && pickedAny ? (
+          {tab === "style" ? (
+            <Style folder={project.folder} />
+          ) : tab === "effect" && pickedAny ? (
             <Effect
               key={effect ? `${effect.kind}:${effect.index}` : ""}
               words={words}

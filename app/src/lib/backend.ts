@@ -247,3 +247,46 @@ export async function openUrl(url: string): Promise<void> {
   if (!inApp) return void window.open(url, "_blank");
   return invoke("open_url", { url });
 }
+
+// --- Luke's style: rules and settings for every video ------------------------
+
+export interface Rule {
+  text: string;
+  on: boolean;
+  by?: "you" | "agent";
+}
+
+export interface StyleSettings {
+  maxPause?: number; // longest pause the rough cut leaves between lines
+  padIn?: number; // room kept before a word at a cut
+  padOut?: number; // room kept after a word at a cut
+}
+
+export interface Style {
+  rules?: Rule[];
+  settings?: StyleSettings;
+}
+
+export interface Suggestion {
+  text: string;
+  why: string;
+}
+
+export async function loadStyle(): Promise<Style> {
+  if (!inApp) return JSON.parse(localStorage.getItem("roughcut-style") ?? "{}");
+  return invoke<Style>("load_style");
+}
+
+export async function saveStyle(style: Style): Promise<void> {
+  if (!inApp) return localStorage.setItem("roughcut-style", JSON.stringify(style));
+  return invoke("save_style", { style });
+}
+
+/** Claude reads what Luke corrected in this video and suggests rules. Uses his plan. */
+export async function suggestRules(folder: string): Promise<Suggestion[]> {
+  if (!inApp) {
+    await new Promise((r) => setTimeout(r, 600));
+    return [{ text: "Keep \"so\" when it starts a sentence", why: "You put back three of Claude's cuts of \"so\"." }];
+  }
+  return invoke<Suggestion[]>("suggest_rules", { folder });
+}

@@ -290,3 +290,25 @@ button.action:hover { background: var(--muted); }
 /* Titles and callouts over the video; draggable while their settings are open */
 .screen canvas.graphics { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .screen canvas.graphics.editing { pointer-events: auto; cursor: move; }
+/* Style: Luke's rules and rough-cut settings */
+.style .rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.style .rules li { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.style .rules li.off .rule-text { color: var(--disabled); }
+.style .tick {
+  width: 16px; height: 16px; flex: none; border-radius: 5px; border: 1px solid var(--stroke-strong); background: transparent;
+  color: var(--background); display: grid; place-items: center; padding: 0; cursor: default;
+}
+.style .tick.on { background: var(--foreground); border-color: var(--foreground); }
+.style .rule-text {
+  flex: 1; min-width: 0; background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 5px 6px;
+  color: var(--foreground); font: inherit; font-size: 12px; outline: none;
+}
+.style .rule-text:focus { border-color: var(--stroke); background: var(--card); }
+.style .add-rule { display: flex; gap: 6px; }
+.style .learn { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--stroke); }
+.style .learn > .btn { align-self: flex-start; }
+.style .idea { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--stroke); border-radius: 10px; font-size: 12px; }
+.style .idea > div { flex: 1; }
+.style .idea .why { color: var(--subtle-foreground); margin-top: 2px; }
+.style .settings { padding-top: 10px; border-top: 1px solid var(--stroke); }
+.style .section-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
