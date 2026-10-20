@@ -6,6 +6,9 @@ import type { Effect, FxItem, FxMode, FxTrack } from "../components/Timeline";
 import {
   removeClip,
   removeNote,
+  removeTimed,
+  setTimed,
+  setTimedStatus,
   removeText,
   removeZoom,
   setClipStatus,
@@ -45,6 +48,18 @@ export function effectTracks(e: Edits, words: Word[]): FxTrack[] {
       : [{ effect: { kind: "text", index }, start: t.start, end: t.end, label: `${TEXT_NAMES[t.style]}: ${t.text}`, pending: t.status === "pending", icon: "text" as const }],
   );
   if (texts.length) tracks.push({ name: "Text", items: texts });
+  const speeds: FxItem[] = (e.speeds ?? []).flatMap((x, index) =>
+    x.status === "restored"
+      ? []
+      : [{ effect: { kind: "speed", index }, start: x.start, end: x.end, label: `${x.rate}x`, pending: x.status === "pending", icon: "speed" as const }],
+  );
+  if (speeds.length) tracks.push({ name: "Speed", items: speeds });
+  const blurs: FxItem[] = (e.blurs ?? []).flatMap((x, index) =>
+    x.status === "restored"
+      ? []
+      : [{ effect: { kind: "blur", index }, start: x.start, end: x.end, label: x.reason || "Blur", pending: x.status === "pending", icon: "blur" as const }],
+  );
+  if (blurs.length) tracks.push({ name: "Blur", items: blurs });
   const zooms: FxItem[] = (e.zooms ?? []).flatMap((z, index) => {
     if (z.status === "restored") return [];
     const [start, end] = zoomSpan(words, z);
@@ -68,6 +83,10 @@ export function moveEffect(e: Edits, words: Word[], fx: Effect, start: number, e
     }
     case "text":
       return setText(e, fx.index, { start, end });
+    case "speed":
+      return setTimed(e, "speeds", fx.index, { start, end });
+    case "blur":
+      return setTimed(e, "blurs", fx.index, { start, end });
   }
   return e;
 }
@@ -80,6 +99,10 @@ export function setEffectStatus(e: Edits, fx: Effect, status: AgentStatus): Edit
       return setClipStatus(e, fx.index, status);
     case "text":
       return setTextStatus(e, fx.index, status);
+    case "speed":
+      return setTimedStatus(e, "speeds", fx.index, status);
+    case "blur":
+      return setTimedStatus(e, "blurs", fx.index, status);
   }
   return e;
 }
@@ -94,6 +117,10 @@ export function removeEffect(e: Edits, fx: Effect): Edits {
       return removeText(e, fx.index);
     case "note":
       return removeNote(e, fx.index);
+    case "speed":
+      return removeTimed(e, "speeds", fx.index);
+    case "blur":
+      return removeTimed(e, "blurs", fx.index);
   }
   return e;
 }
@@ -108,7 +135,8 @@ export function effectStart(e: Edits, words: Word[], fx: Effect): number | null 
     const n = e.notes?.[fx.index];
     return n ? n.at : null;
   }
-  const list = fx.kind === "clip" ? e.clips : fx.kind === "text" ? e.texts : undefined;
+  const lists: Record<string, { start: number }[] | undefined> = { clip: e.clips, text: e.texts, speed: e.speeds, blur: e.blurs };
+  const list = lists[fx.kind];
   const item = list?.[fx.index];
   return item ? item.start + 0.05 : null;
 }

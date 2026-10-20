@@ -1,6 +1,6 @@
-import { Check, Film, MessageSquare, Send, Trash2, Type, X, ZoomIn } from "lucide-react";
+import { Check, EyeOff, Film, Gauge, MessageSquare, Send, Trash2, Type, X, ZoomIn } from "lucide-react";
 import { useEffect, useState } from "react";
-import { TEXT_DEFAULTS, timecode, zoomSpan, type Clip, type Note, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
+import { TEXT_DEFAULTS, timecode, zoomSpan, type BlurFx, type Clip, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
 
 export type Look = { scale: number; x: number; y: number };
 
@@ -10,6 +10,9 @@ interface Props {
   clip?: Clip;
   text?: TextFx;
   onText: (patch: Partial<TextFx>) => void; // saved as one change
+  speed?: SpeedFx;
+  blur?: BlurFx;
+  onTimed: (patch: Partial<SpeedFx & BlurFx>) => void;
   note?: Note;
   onNote: (patch: Partial<Note>) => void;
   onNoteSaved: () => void; // Return in the note: carry on watching
@@ -187,8 +190,107 @@ function NoteSettings({ n, p }: { n: Note; p: Props }) {
   );
 }
 
+function Status({ pending, onKeep, onRemove, what }: { pending: boolean; onKeep: () => void; onRemove: () => void; what: string }) {
+  return (
+    <div className="actions">
+      {pending && (
+        <button className="btn" onClick={onKeep}>
+          <Check size={14} /> Keep
+        </button>
+      )}
+      <button className="btn ghost" onClick={onRemove}>
+        {pending ? <X size={14} /> : <Trash2 size={14} />} Remove {what}
+      </button>
+    </div>
+  );
+}
+
+function SpeedSettings({ x, p }: { x: SpeedFx; p: Props }) {
+  const [rate, setRate] = useState<number | null>(null);
+  const commit = () => {
+    if (rate !== null) p.onTimed({ rate });
+    setRate(null);
+  };
+  const shown = rate ?? x.rate;
+  return (
+    <div className="panel-body effect">
+      <div className="effect-head">
+        <Gauge size={15} /> <span>Speed-up</span>
+        {x.status === "pending" && <span className="dot" title="Claude's, not reviewed yet" />}
+      </div>
+      <p className="why">
+        {x.reason && (
+          <>
+            {x.reason}
+            <br />
+          </>
+        )}
+        <span className="mono">
+          {timecode(x.start, 30, true)} to {timecode(x.end, 30, true)}
+        </span>
+      </p>
+      <label className="setting">
+        <span>Speed</span>
+        <span className="mono">{shown.toFixed(2)}x</span>
+      </label>
+      <input
+        type="range"
+        min={110}
+        max={400}
+        step={5}
+        value={Math.round(shown * 100)}
+        onChange={(e) => setRate(Number(e.target.value) / 100)}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+      />
+      <div className="actions">
+        {[1.5, 2, 3].map((r) => (
+          <button key={r} className="btn" onClick={() => p.onTimed({ rate: r })}>
+            {r}x
+          </button>
+        ))}
+      </div>
+      <p className="hint">The voice keeps its pitch. Drag the block's ends on the timeline to change what's sped up.</p>
+      <Status pending={x.status === "pending"} onKeep={p.onKeep} onRemove={p.onRemove} what="speed-up" />
+    </div>
+  );
+}
+
+function BlurSettings({ x, p }: { x: BlurFx; p: Props }) {
+  return (
+    <div className="panel-body effect">
+      <div className="effect-head">
+        <EyeOff size={15} /> <span>Blur</span>
+        {x.status === "pending" && <span className="dot" title="Claude's, not reviewed yet" />}
+      </div>
+      <p className="why">
+        {x.reason && (
+          <>
+            {x.reason}
+            <br />
+          </>
+        )}
+        <span className="mono">
+          {timecode(x.start, 30, true)} to {timecode(x.end, 30, true)}
+        </span>
+      </p>
+      <label className="setting">
+        <span>Area</span>
+        <span className="mono">
+          {Math.round(x.w * 100)}% × {Math.round(x.h * 100)}%
+        </span>
+      </label>
+      <p className="hint">Drag the box on the video to move it, and its corner to resize it. Drag the block's ends on the timeline to change when it shows.</p>
+      <Status pending={x.status === "pending"} onKeep={p.onKeep} onRemove={p.onRemove} what="blur" />
+    </div>
+  );
+}
+
 /** The settings of the effect picked on the timeline. */
 export function Effect(p: Props) {
+  if (p.speed) return <SpeedSettings x={p.speed} p={p} />;
+  if (p.blur) return <BlurSettings x={p.blur} p={p} />;
   if (p.note) return <NoteSettings n={p.note} p={p} />;
   if (p.text) return <TextSettings t={p.text} onText={p.onText} onKeep={p.onKeep} onRemove={p.onRemove} />;
   if (p.zoom) {

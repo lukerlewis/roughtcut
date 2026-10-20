@@ -1,4 +1,4 @@
-import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, MessageSquarePlus, Scissors, SkipBack, Type } from "lucide-react";
+import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, MessageSquarePlus, Mic, Scissors, SkipBack, Type } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
@@ -16,6 +16,12 @@ import {
   acceptAll,
   addText,
   addNote,
+  addSpeed,
+  addBlur,
+  setTimed,
+  liveBlurs,
+  setVoice,
+  type Rect,
   setNote,
   openNotes,
   addZoom,
@@ -294,9 +300,65 @@ export default function App() {
   const pickedClip = effect?.kind === "clip" ? edits?.clips?.[effect.index] : undefined;
   const pickedText = effect?.kind === "text" ? edits?.texts?.[effect.index] : undefined;
   const pickedNote = effect?.kind === "note" ? edits?.notes?.[effect.index] : undefined;
-  const pickedAny = picked || pickedClip || pickedText || pickedNote;
-  // While a zoom's settings are open the video shows whole, with the zoom as a box to drag.
-  const zoom = picked ? null : zoomAt(words, zooms, state.source);
+  const voiceOn = !!(edits?.voice?.level || edits?.voice?.clean);
+  const pickedSpeed = effect?.kind === "speed" ? edits?.speeds?.[effect.index] : undefined;
+  const pickedBlur = effect?.kind === "blur" ? edits?.blurs?.[effect.index] : undefined;
+  const pickedAny = picked || pickedClip || pickedText || pickedNote || pickedSpeed || pickedBlur;
+  // While a zoom's or blur's settings are open the video shows whole, with a box to drag.
+  const zoom = picked || pickedBlur ? null : zoomAt(words, zooms, state.source);
+  // Blurs: shown live over the video; the picked one is a box to move and resize.
+  const [blurDraft, setBlurDraft] = useState<Rect | null>(null);
+  const blurBox = pickedBlur ? (blurDraft ?? pickedBlur) : null;
+  const blursShowing = edits ? liveBlurs(edits).filter((b) => !(effect?.kind === "blur" && effect.index === edits.blurs!.indexOf(b)) && b.start <= state.source && state.source <= b.end) : [];
+  // Drawn from the playing video each frame: scaled down and back up, which
+  // reads as a strong blur and works in any webview.
+  const blurCanvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = blurCanvas.current;
+    if (!c) return;
+    const boxes = blurBox ? [...blursShowing, blurBox] : blursShowing;
+    const [w, h] = [c.clientWidth, c.clientHeight];
+    if (c.width !== w || c.height !== h) [c.width, c.height] = [w, h];
+    const g = c.getContext("2d")!;
+    g.clearRect(0, 0, w, h);
+    const video = [videoA.current, videoB.current].find((v) => v && v.style.visibility !== "hidden" && v.videoWidth);
+    if (!video || !boxes.length) return;
+    const tiny = document.createElement("canvas");
+    const t = tiny.getContext("2d")!;
+    for (const b of boxes) {
+      const [sx, sy, sw, sh] = [b.x * video.videoWidth, b.y * video.videoHeight, b.w * video.videoWidth, b.h * video.videoHeight];
+      [tiny.width, tiny.height] = [Math.max(2, Math.round((b.w * w) / 14)), Math.max(2, Math.round((b.h * h) / 14))];
+      t.imageSmoothingEnabled = true;
+      t.drawImage(video, sx, sy, sw, sh, 0, 0, tiny.width, tiny.height);
+      g.imageSmoothingEnabled = true;
+      g.imageSmoothingQuality = "high";
+      g.drawImage(tiny, 0, 0, tiny.width, tiny.height, b.x * w, b.y * h, b.w * w, b.h * h);
+    }
+  });
+  const dragBlur = (e: React.PointerEvent, mode: "move" | "size") => {
+    if (!pickedBlur || !blurBox || !frameRef.current || !effect) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = frameRef.current.getBoundingClientRect();
+    const [x0, y0, start, index] = [e.clientX, e.clientY, { x: blurBox.x, y: blurBox.y, w: blurBox.w, h: blurBox.h }, effect.index];
+    let last: Rect | null = null;
+    const move = (m: PointerEvent) => {
+      const [dx, dy] = [(m.clientX - x0) / rect.width, (m.clientY - y0) / rect.height];
+      last =
+        mode === "move"
+          ? { ...start, x: Math.min(1 - start.w, Math.max(0, start.x + dx)), y: Math.min(1 - start.h, Math.max(0, start.y + dy)) }
+          : { ...start, w: Math.min(1 - start.x, Math.max(0.03, start.w + dx)), h: Math.min(1 - start.y, Math.max(0.03, start.h + dy)) };
+      setBlurDraft(last);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (last) change((x) => setTimed(x, "blurs", index, last!));
+      setBlurDraft(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   const box = picked ? zoomBox(look ?? picked) : null;
   const frameRef = useRef<HTMLDivElement>(null);
   const dragBox = (e: React.PointerEvent) => {
@@ -399,6 +461,29 @@ export default function App() {
     setSelection(null);
     setTimeout(() => pickEffect({ kind: "text", index }), 0);
   };
+  // Speed-ups and blurs: over the selected words, or a few seconds from the playhead.
+  const spanForNew = (): [number, number] | null => {
+    if (!project) return null;
+    if (selection) return [words[selection.first].start, words[selection.last].end];
+    return [state.source, cutToSource(ranges, state.time + 3).source];
+  };
+  const newTimed = (kind: "speed" | "blur") => {
+    const span = spanForNew();
+    if (!edits || !span || span[1] - span[0] < 0.1) return;
+    player.current?.pause();
+    const list = kind === "speed" ? "speeds" : "blurs";
+    change((x) => (kind === "speed" ? addSpeed(x, span[0], span[1]) : addBlur(x, span[0], span[1])));
+    setSelection(null);
+    // addSpeed may drop overlapping ones, so find the new one by its times.
+    setTimeout(() => {
+      setEdits((cur) => {
+        const index = ((cur?.[list] ?? []) as { start: number; end: number }[]).findIndex((x) => x.start === span[0] && x.end === span[1]);
+        if (index >= 0) pickEffect({ kind, index });
+        return cur;
+      });
+    }, 0);
+  };
+
   // Notes: N drops one at the playhead; Return in it carries on playing if it was.
   const resumeAfterNote = useRef(false);
   const newNote = () => {
@@ -497,6 +582,12 @@ export default function App() {
       } else if (!mod && e.key.toLowerCase() === "n") {
         e.preventDefault();
         newNote();
+      } else if (!mod && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        newTimed("speed");
+      } else if (!mod && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        newTimed("blur");
       } else if (!mod && e.key.toLowerCase() === "t") {
         e.preventDefault();
         newText();
@@ -536,7 +627,7 @@ export default function App() {
         captions.on && cues.length ? captionStrips(cues, captions.style, project.info.width, project.info.height) : null,
         await graphicsLayer(placed.map((p) => ({ ...p, full: false })), project.info.width, project.info.height, project.info.fps),
       ].filter((l) => l !== null);
-      await backend.exportCut(project.source, segments(ranges, words, zooms, clips, project.folder), layers, dest);
+      await backend.exportCut(project.source, segments(ranges, words, zooms, clips, project.folder, edits ? liveBlurs(edits) : []), layers, edits?.voice ?? {}, dest);
       setExporting({ progress: 1, dest, done: true });
     } catch (e) {
       setExporting({ progress: 0, dest, done: true, error: String(e) });
@@ -617,6 +708,14 @@ export default function App() {
             </button>
           ))}
         </div>
+        <div className="seg" title="Voice: polished evens out loudness and cleans up hiss in the export">
+          <button className={!voiceOn ? "on" : ""} onClick={() => change((x) => setVoice(x, {}))}>
+            <Mic size={15} /> As recorded
+          </button>
+          <button className={voiceOn ? "on" : ""} onClick={() => change((x) => setVoice(x, { level: true, clean: true }))}>
+            Polished
+          </button>
+        </div>
         <button className="btn ghost" onClick={choose}>
           <FolderOpen size={16} /> Open
         </button>
@@ -628,7 +727,7 @@ export default function App() {
       <div className="main">
         <div className="panel">
           <div className="panel-head">
-            Transcript <span className="meta">Select words, then ⌫ to cut or Z to zoom in.</span>
+            Transcript <span className="meta">Select words, then ⌫ cut, Z zoom, S speed up, B blur.</span>
           </div>
           <Transcript
             words={words}
@@ -662,7 +761,18 @@ export default function App() {
                 <video ref={videoA} src={project.url} />
                 <video ref={videoB} src={project.url} />
                 {clip && clipUrls[clip.file] && <video ref={clipVideo} className="clip" src={clipUrls[clip.file]} playsInline />}
+                <canvas ref={blurCanvas} className="blurs" />
               </div>
+              {blurBox && (
+                <div
+                  className="blurbox editing"
+                  title="Drag to move the blur"
+                  onPointerDown={(e) => dragBlur(e, "move")}
+                  style={{ left: `${blurBox.x * 100}%`, top: `${blurBox.y * 100}%`, width: `${blurBox.w * 100}%`, height: `${blurBox.h * 100}%` }}
+                >
+                  <span className="handle" title="Drag to resize" onPointerDown={(e) => dragBlur(e, "size")} />
+                </div>
+              )}
               <canvas
                 ref={gfx}
                 className={`graphics ${pickedText ? "editing" : ""}`}
@@ -746,6 +856,9 @@ export default function App() {
               clip={pickedClip}
               text={pickedText}
               onText={(patch) => effect && change((x) => setText(x, effect.index, patch))}
+              speed={pickedSpeed}
+              blur={pickedBlur}
+              onTimed={(patch) => effect && change((x) => setTimed(x, effect.kind === "speed" ? "speeds" : "blurs", effect.index, patch))}
               note={pickedNote}
               onNote={(patch) => effect && change((x) => setNote(x, effect.index, patch))}
               onNoteSaved={noteSaved}

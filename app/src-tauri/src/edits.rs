@@ -142,6 +142,15 @@ pub fn texts(e: &mut Edits) -> &mut Vec<Value> {
     v.as_array_mut().unwrap()
 }
 
+/// One of the editor's JSON lists (speeds, blurs...), created if missing.
+pub fn list<'a>(e: &'a mut Edits, key: &str) -> &'a mut Vec<Value> {
+    let v = e.other.entry(key).or_insert_with(|| Value::Array(vec![]));
+    if !v.is_array() {
+        *v = Value::Array(vec![]);
+    }
+    v.as_array_mut().unwrap()
+}
+
 /// Notes pinned to moments: Luke's for Claude, or Claude's for Luke.
 pub fn notes(e: &mut Edits) -> &mut Vec<Value> {
     let v = e.other.entry("notes").or_insert_with(|| Value::Array(vec![]));
@@ -179,7 +188,7 @@ pub fn save(folder: &Path, e: &Edits) -> Result<(), String> {
 }
 
 /// Seconds since 1970 as an ISO time, without pulling in a date library.
-fn now() -> String {
+pub fn now() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let (days, rem) = (secs / 86400, secs % 86400);
     // Civil date from days since epoch (Howard Hinnant's algorithm).

@@ -2,7 +2,7 @@
 // back to fixtures under /fixtures so the UI can be worked on without the app.
 
 import type { CaptionStrips } from "./captions";
-import type { Decisions, Edits, Segment, Word } from "./edl";
+import type { Decisions, Edits, Segment, Voice, Word } from "./edl";
 
 export interface Opened {
   source: string;
@@ -99,14 +99,15 @@ export async function exportCut(
   source: string,
   segments: Segment[],
   overlays: CaptionStrips[],
+  voice: Voice,
   dest: string,
 ): Promise<void> {
   if (!inApp) {
-    (window as any).__lastExport = { source, segments, overlays: overlays.map((o) => ({ top: o.top, frames: o.frames.length })), dest };
+    (window as any).__lastExport = { source, segments, overlays: overlays.map((o) => ({ top: o.top, frames: o.frames.length })), voice, dest };
     await new Promise((r) => setTimeout(r, 400));
     return;
   }
-  return invoke("export", { source, segments, overlays, dest });
+  return invoke("export", { source, segments, overlays, voice, dest });
 }
 
 // --- Claude in the sidebar -------------------------------------------------

@@ -3,6 +3,7 @@ import {
   acceptAll,
   cutKinds,
   cutToSource,
+  cutDuration,
   cutWords,
   fromDecisions,
   keptRanges,
@@ -36,6 +37,9 @@ import {
   setText,
   removeText,
   addNote,
+  addSpeed,
+  applySpeeds,
+  removeTimed,
   setNote,
   openNotes,
   type Edits,
@@ -259,5 +263,35 @@ describe("notes", () => {
     e = setNote(e, 0, { text: "Too slow here" });
     expect(openNotes(e)).toHaveLength(1);
     expect(openNotes(setNote(e, 0, { done: true }))).toEqual([]);
+  });
+});
+
+describe("speed-ups and blurs", () => {
+  it("splits ranges at a speed-up and maps time through it", () => {
+    const r = applySpeeds([[0, 10]], [{ start: 2, end: 6, rate: 2, by: "you" }]);
+    expect(r).toEqual([[0, 2], [2, 6, 2], [6, 10]]);
+    expect(cutDuration(r)).toBe(8);
+    expect(sourceToCut(r, 4)).toBe(3);
+    expect(sourceToCut(r, 8)).toBe(6);
+    expect(cutToSource(r, 3).source).toBe(4);
+  });
+
+  it("exports speed and blur per piece", () => {
+    const blur = { start: 1, end: 3, x: 0.1, y: 0.1, w: 0.2, h: 0.2, by: "you" as const };
+    const segs = segments([[0, 2], [2, 6, 2]], [], [], [], "", [blur]);
+    expect(segs).toEqual([
+      { start: 0, end: 1, zoom: null },
+      { start: 1, end: 2, zoom: null, blur: [{ x: 0.1, y: 0.1, w: 0.2, h: 0.2 }] },
+      { start: 2, end: 3, zoom: null, speed: 2, blur: [{ x: 0.1, y: 0.1, w: 0.2, h: 0.2 }] },
+      { start: 3, end: 6, zoom: null, speed: 2 },
+    ]);
+  });
+
+  it("replaces an overlapping speed-up and removes Claude's as reviewed", () => {
+    let e: Edits = { version: 1, agent: [], user: [], log: [] };
+    e = addSpeed(addSpeed(e, 1, 5), 4, 8, 2);
+    expect(e.speeds).toEqual([{ start: 4, end: 8, rate: 2, by: "you" }]);
+    const c: Edits = { ...e, speeds: [{ ...e.speeds![0], by: "agent", status: "pending" }] };
+    expect(removeTimed(c, "speeds", 0).speeds![0].status).toBe("restored");
   });
 });

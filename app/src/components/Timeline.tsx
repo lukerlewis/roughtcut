@@ -1,6 +1,6 @@
 import { Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { blocks as wordBlocks, cutDuration, cutToSource, sourceToCut, timecode, type Block, type Word } from "../lib/edl";
+import { blocks as wordBlocks, cutDuration, cutToSource, sourceToCut, timecode, type Block, type Range, type Word } from "../lib/edl";
 
 /** An effect on the timeline, by kind and its index in that kind's list. */
 export type Effect = { kind: string; index: number };
@@ -33,7 +33,7 @@ export interface Pin {
 export type FxMode = "left" | "right" | "move";
 
 interface Props {
-  ranges: [number, number][];
+  ranges: Range[];
   duration: number; // of the source
   peaks: Uint8Array | null; // loudness per 10ms of source
   time: number; // playhead, seconds into the cut

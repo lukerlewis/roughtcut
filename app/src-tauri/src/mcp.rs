@@ -156,6 +156,41 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] },
         },
         {
+            "name": "speed_up",
+            "description": "Play words from..to faster (1.1 to 4; 1.5 is a gentle speed-up, 2 or more for a montage or a slow bit of screen work). The voice keeps its pitch. Shows to Luke as your unreviewed speed-up, adjustable on the timeline.",
+            "inputSchema": {
+                "type": "object",
+                "properties": range(json!({ "rate": { "type": "number" }, "reason": { "type": "string" } })),
+                "required": ["from", "to", "rate", "reason"],
+            },
+        },
+        {
+            "name": "blur",
+            "description": "Blur out a box of the frame while words from..to play (a face, a screen with private details). x, y are its top-left corner and w, h its size, as fractions of the frame. Luke can move and resize it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": range(json!({
+                    "x": { "type": "number" }, "y": { "type": "number" }, "w": { "type": "number" }, "h": { "type": "number" },
+                    "reason": { "type": "string" },
+                })),
+                "required": ["from", "to", "x", "y", "w", "h", "reason"],
+            },
+        },
+        {
+            "name": "remove_effect",
+            "description": "Take your speed-ups or blurs overlapping words from..to off the timeline.",
+            "inputSchema": {
+                "type": "object",
+                "properties": range(json!({ "kind": { "type": "string", "enum": ["speed", "blur"] } })),
+                "required": ["kind", "from", "to"],
+            },
+        },
+        {
+            "name": "set_voice",
+            "description": "Polish the voice in the export (even loudness and less hiss), or turn that off.",
+            "inputSchema": { "type": "object", "properties": { "polish": { "type": "boolean" } }, "required": ["polish"] },
+        },
+        {
             "name": "remove_text",
             "description": "Take your text overlapping words from..to off the screen.",
             "inputSchema": { "type": "object", "properties": range(json!({})), "required": ["from", "to"] },
@@ -287,6 +322,55 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             edits::add_text(&mut e, style, text.trim(), args["sub"].as_str(), start, end, place, reason.trim());
             edits::save(folder, &e)?;
             Ok(format!("Added a {style} \"{}\" over {a}-{b} ({start:.2}-{end:.2}s). Luke will see it in blue until he reviews it.", text.trim()))
+        }
+        "speed_up" | "blur" => {
+            let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
+            if a > b {
+                return Err("`from` must not be after `to`".into());
+            }
+            let reason = args["reason"].as_str().filter(|r| !r.trim().is_empty()).ok_or("Give a short `reason`.")?.trim();
+            let (start, end) = (words[a].start, words[b].end);
+            let item = if name == "speed_up" {
+                let rate = args["rate"].as_f64().ok_or("`rate` must be a number")?.clamp(1.1, 4.0);
+                // One speed per moment: Claude's new one replaces its own overlapping ones.
+                for s in edits::list(&mut e, "speeds").iter_mut() {
+                    let (s0, s1) = (s["start"].as_f64().unwrap_or(0.0), s["end"].as_f64().unwrap_or(0.0));
+                    if s["by"] == "agent" && s["status"] != "restored" && s0 < end && s1 > start {
+                        s["status"] = json!("restored");
+                    }
+                }
+                json!({ "start": start, "end": end, "rate": (rate * 100.0).round() / 100.0, "by": "agent", "status": "pending", "reason": reason })
+            } else {
+                let f = |k: &str| args[k].as_f64().ok_or(format!("`{k}` must be a fraction of the frame"));
+                let (x, y) = (f("x")?.clamp(0.0, 0.97), f("y")?.clamp(0.0, 0.97));
+                let (w, h) = (f("w")?.clamp(0.03, 1.0 - x), f("h")?.clamp(0.03, 1.0 - y));
+                json!({ "start": start, "end": end, "x": x, "y": y, "w": w, "h": h, "by": "agent", "status": "pending", "reason": reason })
+            };
+            edits::list(&mut e, if name == "speed_up" { "speeds" } else { "blurs" }).push(item);
+            e.log.push(json!({ "at": edits::now(), "by": "agent", "op": name, "note": reason }));
+            edits::save(folder, &e)?;
+            Ok(format!("Added a {} over {a}-{b}. Luke will see it in blue until he reviews it.", if name == "speed_up" { "speed-up" } else { "blur" }))
+        }
+        "remove_effect" => {
+            let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
+            let key = if args["kind"] == "blur" { "blurs" } else { "speeds" };
+            let (start, end) = (words[a].start, words[b.max(a)].end);
+            let mut count = 0;
+            for t in edits::list(&mut e, key).iter_mut() {
+                let (s, f) = (t["start"].as_f64().unwrap_or(0.0), t["end"].as_f64().unwrap_or(0.0));
+                if t["by"] == "agent" && t["status"] != "restored" && s < end && f > start {
+                    t["status"] = json!("restored");
+                    count += 1;
+                }
+            }
+            edits::save(folder, &e)?;
+            Ok(format!("Removed {count}."))
+        }
+        "set_voice" => {
+            let on = args["polish"].as_bool().ok_or("`polish` must be true or false")?;
+            e.other.insert("voice".into(), if on { json!({ "level": true, "clean": true }) } else { json!({}) });
+            edits::save(folder, &e)?;
+            Ok(if on { "The export will polish the voice.".into() } else { "The export will use the voice as recorded.".into() })
         }
         "add_rule" => {
             let text = args["text"].as_str().filter(|t| !t.trim().is_empty()).ok_or("Give the rule's `text`.")?;
@@ -420,6 +504,23 @@ fn describe(words: &[edits::Word], e: &edits::Edits, duration: f64) -> String {
             s += &format!("note {i} at {at:.2}s, near word {near} ({who}): {}\n", note["text"].as_str().unwrap_or(""));
         }
     }
+    for (key, title) in [("speeds", "Speed-ups"), ("blurs", "Blurs")] {
+        let items: Vec<&Value> = e.other.get(key).and_then(Value::as_array).map(|a| a.iter().filter(|t| t["status"] != "restored").collect()).unwrap_or_default();
+        if !items.is_empty() {
+            s += &format!("{title} (source seconds):\n");
+            for t in items {
+                let who = if t["by"] == "agent" { format!("yours, {}", t["status"].as_str().unwrap_or("pending")) } else { "Luke's".into() };
+                let what = if key == "speeds" { format!("{}x", t["rate"]) } else { {
+                    let f = |k: &str| t[k].as_f64().unwrap_or(0.0);
+                    format!("box x {:.2} y {:.2} w {:.2} h {:.2}", f("x"), f("y"), f("w"), f("h"))
+                } };
+                s += &format!("{:.2}-{:.2}s {what} ({who})\n", t["start"].as_f64().unwrap_or(0.0), t["end"].as_f64().unwrap_or(0.0));
+            }
+        }
+    }
+    if e.other.get("voice").map(|v| v["level"] == true || v["clean"] == true) == Some(true) {
+        s += "Voice: polished on export.\n";
+    }
     let clips: Vec<_> = e.clips.iter().filter(|c| c.status.as_deref() != Some("restored")).collect();
     if !clips.is_empty() {
         s += "Clips on the timeline (playing instead of the recording):\n";
@@ -464,7 +565,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 13);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 17);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");
@@ -508,6 +609,18 @@ mod tests {
         let again = rpc(&dir, "tools/call", json!({ "name": "add_rule", "arguments": { "text": "keep 'so' at the start" } }));
         assert_eq!(again["content"][0]["text"], "Luke already has that rule.");
         assert!(crate::style::corrections(&dir).unwrap().contains("Luke put it back"));
+
+        rpc(&dir, "tools/call", json!({ "name": "speed_up", "arguments": { "from": 2, "to": 4, "rate": 9, "reason": "slow bit" } }));
+        rpc(&dir, "tools/call", json!({ "name": "blur", "arguments": { "from": 5, "to": 6, "x": 0.9, "y": 0.1, "w": 0.5, "h": 0.2, "reason": "address" } }));
+        rpc(&dir, "tools/call", json!({ "name": "set_voice", "arguments": { "polish": true } }));
+        let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
+        let text = edit["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("1.00-2.40s 4.0x (yours, pending)"), "{text}");
+        assert!(text.contains("box x 0.90 y 0.10 w 0.10 h 0.20"), "{text}");
+        assert!(text.contains("Voice: polished on export."), "{text}");
+        rpc(&dir, "tools/call", json!({ "name": "remove_effect", "arguments": { "kind": "speed", "from": 3, "to": 3 } }));
+        let saved: Value = serde_json::from_str(&fs::read_to_string(dir.join("edits.json")).unwrap()).unwrap();
+        assert_eq!(saved["speeds"][0]["status"], "restored");
 
         let bad = rpc(&dir, "tools/call", json!({ "name": "cut_words", "arguments": { "from": 3, "to": 99, "reason": "x" } }));
         assert_eq!(bad["isError"], true);

@@ -184,7 +184,30 @@ pub struct Captions {
 /// The filter graph that trims each piece, zooms it if asked, joins them and
 /// lays each overlay layer (the inputs after the recording and clips) over
 /// the result, in order. `overlays` holds each layer's top edge.
-pub fn concat_graph(segments: &[Segment], inputs: &[std::path::PathBuf], width: u32, height: u32, overlays: &[f64]) -> String {
+/// Voice polish for the whole cut: steady loudness and less background hiss.
+#[derive(Deserialize, Clone, Copy, Debug, Default)]
+pub struct Voice {
+    #[serde(default)]
+    pub level: bool,
+    #[serde(default)]
+    pub clean: bool,
+}
+
+impl Voice {
+    fn filter(&self) -> String {
+        let mut f = vec![];
+        if self.clean {
+            f.push("highpass=f=70,afftdn=nf=-25:tn=1");
+        }
+        if self.level {
+            // Spoken-word loudness for YouTube and podcasts.
+            f.push("loudnorm=I=-16:TP=-1.5:LRA=11");
+        }
+        f.join(",")
+    }
+}
+
+pub fn concat_graph(segments: &[Segment], inputs: &[std::path::PathBuf], width: u32, height: u32, overlays: &[f64], voice: Voice) -> String {
     let mut g = String::new();
     for (i, s) in segments.iter().enumerate() {
         let (a, b) = (s.start, s.end);
@@ -234,16 +257,19 @@ pub fn concat_graph(segments: &[Segment], inputs: &[std::path::PathBuf], width: 
         g += &format!("[v{i}][a{i}]");
     }
     let n = segments.len();
+    let polish = voice.filter();
+    let a = if polish.is_empty() { "a" } else { "araw" };
+    let tail = if polish.is_empty() { String::new() } else { format!(";[araw]{polish},aresample=48000[a]") };
     if overlays.is_empty() {
-        return g + &format!("concat=n={n}:v=1:a=1[v][a]");
+        return g + &format!("concat=n={n}:v=1:a=1[v][{a}]") + &tail;
     }
-    g += &format!("concat=n={n}:v=1:a=1[o0][a]");
+    g += &format!("concat=n={n}:v=1:a=1[o0][{a}]");
     for (k, top) in overlays.iter().enumerate() {
         let c = inputs.len() + k; // overlay layers come in after the recording and clips
         let out = if k + 1 == overlays.len() { "v".to_string() } else { format!("o{}", k + 1) };
         g += &format!(";[{c}:v]format=rgba[l{k}];[o{k}][l{k}]overlay=x=0:y=main_h*{top:.4}:eof_action=pass:format=auto[{out}]");
     }
-    g
+    g + &tail
 }
 
 /// The FFmpeg concat list that shows each caption image for its time, with
@@ -296,7 +322,7 @@ fn base64(text: &str) -> Vec<u8> {
 /// Renders the cut at full quality. Calls `progress` with 0..1 as it goes.
 /// Tries the Mac's hardware encoder first and falls back to x264, so a
 /// machine (or FFmpeg build) without it still exports.
-pub fn export(source: &Path, segments: &[Segment], overlays: &[Captions], dest: &Path, progress: impl Fn(f64)) -> Result<(), String> {
+pub fn export(source: &Path, segments: &[Segment], overlays: &[Captions], voice: Voice, dest: &Path, progress: impl Fn(f64)) -> Result<(), String> {
     if segments.is_empty() {
         return Err("Nothing is kept, so there's nothing to export.".into());
     }
@@ -311,7 +337,7 @@ pub fn export(source: &Path, segments: &[Segment], overlays: &[Captions], dest: 
     }
     let files = inputs(source, segments);
     let tops: Vec<f64> = layers.iter().map(|c| c.top).collect();
-    let graph = concat_graph(segments, &files, info.width, info.height, &tops);
+    let graph = concat_graph(segments, &files, info.width, info.height, &tops, voice);
     let lists: Vec<std::path::PathBuf> = caps.iter().map(|d| d.join("list.ffconcat")).collect();
     let mut encoders: Vec<Vec<&str>> = Vec::new();
     if cfg!(target_os = "macos") {
@@ -402,12 +428,14 @@ mod tests {
             Segment { start: 4.0, end: 6.0, zoom: Some(Zoom { scale: 1.5, x: 0.5, y: 0.4 }), file: None, speed: None, blur: vec![] },
         ];
         let files = inputs(Path::new("/r.mov"), &segs);
-        let g = concat_graph(&segs, &files, 1920, 1080, &[]);
+        let g = concat_graph(&segs, &files, 1920, 1080, &[], Voice::default());
         assert!(g.contains("[0:v]trim=1.0000:2.5000,setpts=PTS-STARTPTS,setsar=1[v0]"));
         assert!(g.contains("crop=w=iw/1.5:h=ih/1.5:x=(iw-iw/1.5)*0.5:y=(ih-ih/1.5)*0.4,scale=1920:1080"));
         assert!(g.contains("[0:a]atrim=4.0000:6.0000"));
         assert!(g.ends_with("[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"));
-        let g = concat_graph(&segs, &files, 1920, 1080, &[0.6, 0.0]);
+        let polished = concat_graph(&segs, &files, 1920, 1080, &[], Voice { level: true, clean: false });
+        assert!(polished.ends_with("[v][araw];[araw]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[a]"), "{polished}");
+        let g = concat_graph(&segs, &files, 1920, 1080, &[0.6, 0.0], Voice::default());
         assert!(g.ends_with(
             "concat=n=2:v=1:a=1[o0][a];[1:v]format=rgba[l0];[o0][l0]overlay=x=0:y=main_h*0.6000:eof_action=pass:format=auto[o1];\
              [2:v]format=rgba[l1];[o1][l1]overlay=x=0:y=main_h*0.0000:eof_action=pass:format=auto[v]"
@@ -467,7 +495,7 @@ mod tests {
             frames: vec![CaptionFrame { start: 0.2, end: 1.0, png: png.into() }, CaptionFrame { start: 1.5, end: 2.0, png: png.into() }],
         };
         let titles = Captions { top: 0.0, blank: png.into(), frames: vec![CaptionFrame { start: 0.0, end: 1.0, png: png.into() }] };
-        export(&src, &segs, &[captions, titles], &dest, |p| seen.set(p)).unwrap();
+        export(&src, &segs, &[captions, titles], Voice { level: true, clean: true }, &dest, |p| seen.set(p)).unwrap();
         let got = probe(&dest).unwrap();
         assert!((got.duration - 3.5).abs() < 0.15, "{}", got.duration);
         assert_eq!((got.width, got.height), (320, 240));

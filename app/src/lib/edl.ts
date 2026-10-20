@@ -87,6 +87,9 @@ export interface Edits {
   clips?: Clip[];
   texts?: TextFx[];
   notes?: Note[];
+  speeds?: SpeedFx[];
+  blurs?: BlurFx[];
+  voice?: Voice;
   /** Play every pause, start to end, as recorded. True until a rough cut tightens them. */
   keepPauses?: boolean;
 }
@@ -149,8 +152,8 @@ export function keptSet(n: number, e: Edits): Set<number> {
 }
 
 /** Source ranges to play, in order. Mirrors kept_ranges in roughcut/timeline.py. */
-export function keptRanges(words: Word[], keep: Set<number>, duration: number, p: Params = PARAMS): [number, number][] {
-  const ranges: [number, number][] = [];
+export function keptRanges(words: Word[], keep: Set<number>, duration: number, p: Params = PARAMS): Range[] {
+  const ranges: Range[] = [];
   let prev = -2;
   words.forEach((w, i) => {
     if (!keep.has(i)) return;
@@ -168,15 +171,15 @@ export function keptRanges(words: Word[], keep: Set<number>, duration: number, p
 }
 
 /** The ranges with Luke's timeline trims applied. */
-export function applyTrims(ranges: [number, number][], trims: Trim[], duration: number): [number, number][] {
-  let out = ranges.map(([a, b]) => [a, b] as [number, number]);
+export function applyTrims(ranges: Range[], trims: Trim[], duration: number): Range[] {
+  let out: Range[] = ranges.map(([a, b]) => [a, b]);
   for (const t of trims) {
     const [s, e] = [Math.max(0, t.start), Math.min(duration, t.end)];
     if (e <= s) continue;
     if (t.keep) {
       out.push([s, e]);
       out.sort((x, y) => x[0] - y[0]);
-      const merged: [number, number][] = [];
+      const merged: Range[] = [];
       for (const r of out) {
         const last = merged[merged.length - 1];
         if (last && r[0] <= last[1] + 1e-6) last[1] = Math.max(last[1], r[1]);
@@ -184,15 +187,15 @@ export function applyTrims(ranges: [number, number][], trims: Trim[], duration: 
       }
       out = merged;
     } else
-      out = out.flatMap(([a, b]): [number, number][] =>
-        e <= a || s >= b ? [[a, b]] : ([[a, s], [e, b]] as [number, number][]).filter(([x, y]) => y - x > 0.001),
+      out = out.flatMap(([a, b]): Range[] =>
+        e <= a || s >= b ? [[a, b]] : ([[a, s], [e, b]] as Range[]).filter(([x, y]) => y - x > 0.001),
       );
   }
   return out.filter(([a, b]) => b - a >= 0.04);
 }
 
 /** What plays: the kept words' ranges with Luke's trims applied. */
-export function editRanges(words: Word[], e: Edits, duration: number): [number, number][] {
+export function editRanges(words: Word[], e: Edits, duration: number): Range[] {
   const keep = keptSet(words.length, e);
   let ranges = keptRanges(words, keep, duration, e.keepPauses ? { ...PARAMS, maxPause: Infinity } : PARAMS);
   if (e.keepPauses && ranges.length) {
@@ -200,12 +203,31 @@ export function editRanges(words: Word[], e: Edits, duration: number): [number, 
     if (keep.has(0)) ranges[0][0] = 0;
     if (keep.has(words.length - 1)) ranges[ranges.length - 1][1] = duration;
   }
-  return applyTrims(ranges, e.trims ?? [], duration);
+  return applySpeeds(applyTrims(ranges, e.trims ?? [], duration), liveSpeeds(e));
+}
+
+/** Splits the ranges where a speed-up starts or ends, so each piece has one rate. */
+export function applySpeeds(ranges: Range[], speeds: SpeedFx[]): Range[] {
+  if (!speeds.length) return ranges;
+  const out: Range[] = [];
+  for (const [a, b] of ranges) {
+    const points = new Set([a, b]);
+    for (const s of speeds) for (const t of [s.start, s.end]) if (t > a && t < b) points.add(t);
+    const sorted = [...points].sort((x, y) => x - y);
+    for (let i = 0; i + 1 < sorted.length; i++) {
+      const [s, t] = [sorted[i], sorted[i + 1]];
+      if (t - s < 0.001) continue;
+      const mid = (s + t) / 2;
+      const rate = speeds.find((x) => x.start <= mid && mid <= x.end)?.rate;
+      out.push(rate && rate !== 1 ? [s, t, rate] : [s, t]);
+    }
+  }
+  return out;
 }
 
 /** Who cut each word, as the transcript shows it: a word a trim took out reads
  *  as Luke's cut, and one a trim brought back reads as kept. */
-export function shownKinds(words: Word[], e: Edits, ranges: [number, number][]): CutKind[] {
+export function shownKinds(words: Word[], e: Edits, ranges: Range[]): CutKind[] {
   const kinds = cutKinds(words.length, e);
   if (!e.trims?.length) return kinds;
   let r = 0;
@@ -219,7 +241,7 @@ export function shownKinds(words: Word[], e: Edits, ranges: [number, number][]):
 
 /** Luke drags a clip's edges on the timeline: clip `index` of `ranges` now
  *  runs from start to end (source seconds). */
-export function trimClip(e: Edits, ranges: [number, number][], index: number, start: number, end: number): Edits {
+export function trimClip(e: Edits, ranges: Range[], index: number, start: number, end: number): Edits {
   const [a, b] = ranges[index];
   const trims: Trim[] = [];
   if (start > a + 1e-4) trims.push({ start: a, end: start, keep: false });
@@ -231,7 +253,7 @@ export function trimClip(e: Edits, ranges: [number, number][], index: number, st
 }
 
 /** Luke selects a clip on the timeline and deletes it. */
-export function deleteClip(e: Edits, ranges: [number, number][], index: number): Edits {
+export function deleteClip(e: Edits, ranges: Range[], index: number): Edits {
   const [a, b] = ranges[index];
   return {
     ...e,
@@ -264,28 +286,34 @@ export function clearTrims(e: Edits, start: number, end: number): Edits {
   return { ...e, trims };
 }
 
-export function cutDuration(ranges: [number, number][]): number {
-  return ranges.reduce((s, [a, b]) => s + (b - a), 0);
+/** A kept stretch of the recording, source seconds a..b, played at `rate` (1 if left out). */
+export type Range = [number, number, number?];
+
+const len = ([a, b, r]: Range) => (b - a) / (r || 1);
+
+export function cutDuration(ranges: Range[]): number {
+  return ranges.reduce((s, r) => s + len(r), 0);
 }
 
 /** Where a source time lands in the cut; a removed moment maps to the next kept frame. */
-export function sourceToCut(ranges: [number, number][], t: number): number {
+export function sourceToCut(ranges: Range[], t: number): number {
   let acc = 0;
-  for (const [a, b] of ranges) {
+  for (const r of ranges) {
+    const [a, b, rate] = r;
     if (t < a) return acc;
-    if (t <= b) return acc + (t - a);
-    acc += b - a;
+    if (t <= b) return acc + (t - a) / (rate || 1);
+    acc += len(r);
   }
   return acc;
 }
 
 /** The source time shown at a point in the cut, plus which range it's in. */
-export function cutToSource(ranges: [number, number][], t: number): { source: number; index: number } {
+export function cutToSource(ranges: Range[], t: number): { source: number; index: number } {
   let acc = 0;
   for (let i = 0; i < ranges.length; i++) {
-    const [a, b] = ranges[i];
-    if (t < acc + (b - a) || i === ranges.length - 1) return { source: Math.min(b, a + Math.max(0, t - acc)), index: i };
-    acc += b - a;
+    const [a, b, rate] = ranges[i];
+    if (t < acc + len(ranges[i]) || i === ranges.length - 1) return { source: Math.min(b, a + Math.max(0, t - acc) * (rate || 1)), index: i };
+    acc += len(ranges[i]);
   }
   return { source: 0, index: 0 };
 }
@@ -339,7 +367,7 @@ export function setAgentStatus(e: Edits, index: number, status: AgentStatus): Ed
 }
 
 /** The lists of effects Claude can add, each reviewed like its cuts. */
-export const EFFECT_LISTS = ["zooms", "clips", "texts"] as const;
+export const EFFECT_LISTS = ["zooms", "clips", "texts", "speeds", "blurs"] as const;
 export type EffectList = (typeof EFFECT_LISTS)[number];
 
 export function acceptAll(e: Edits): Edits {
@@ -445,27 +473,36 @@ export interface Segment {
   end: number;
   zoom: { scale: number; x: number; y: number } | null;
   file?: string; // one of Claude's clips playing instead of the recording
+  speed?: number; // played faster, pitch kept
+  blur?: Rect[]; // boxes blurred out
 }
 
 /** The kept ranges split wherever a zoom or clip starts or ends, for export.
  *  Pieces under a clip play from the clip's file. */
-export function segments(ranges: [number, number][], words: Word[], zooms: Zoom[], clips: Clip[] = [], folder = ""): Segment[] {
+export function segments(ranges: Range[], words: Word[], zooms: Zoom[], clips: Clip[] = [], folder = "", blurs: BlurFx[] = []): Segment[] {
   const spans = zooms.map((z) => ({ span: zoomSpan(words, z), zoom: { scale: z.scale, x: z.x, y: z.y } }));
   const pieces: (Segment & { clip: number })[] = [];
-  for (const [a, b] of ranges) {
+  const live = blurs.filter((x) => x.status !== "restored");
+  for (const [a, b, rate] of ranges) {
     const cuts = new Set([a, b]);
     for (const { span } of spans) for (const t of span) if (t > a && t < b) cuts.add(t);
     for (const c of clips) for (const t of [c.start, c.end]) if (t > a && t < b) cuts.add(t);
+    for (const x of live) for (const t of [x.start, x.end]) if (t > a && t < b) cuts.add(t);
     const points = [...cuts].sort((x, y) => x - y);
     for (let i = 0; i + 1 < points.length; i++) {
       const [s, t] = [points[i], points[i + 1]];
       const mid = (s + t) / 2;
       const z = spans.find(({ span }) => span[0] <= mid && mid <= span[1]);
       const clip = clips.findIndex((c) => c.start <= mid && mid <= c.end);
+      const blur = live.filter((x) => x.start <= mid && mid <= x.end).map(({ x, y, w, h }) => ({ x, y, w, h }));
+      const piece: Segment & { clip: number } = { start: s, end: t, zoom: z?.zoom ?? null, clip };
+      if (rate && rate !== 1) piece.speed = rate;
+      if (blur.length) piece.blur = blur;
       const last = pieces[pieces.length - 1];
       // Merge with the previous piece if nothing changes between them.
-      if (last && last.end === s && last.clip === clip && JSON.stringify(last.zoom) === JSON.stringify(z?.zoom ?? null)) last.end = t;
-      else pieces.push({ start: s, end: t, zoom: z?.zoom ?? null, clip });
+      const same = (p: Segment & { clip: number }) => JSON.stringify({ ...p, start: 0, end: 0 });
+      if (last && last.end === s && same(last) === same(piece)) last.end = t;
+      else pieces.push(piece);
     }
   }
   return pieces.map(({ clip, ...p }) => {
@@ -498,7 +535,7 @@ const MAX_CHARS = 28;
 
 /** Kept words grouped into short lines, one cue per word so the spoken word
  *  can be highlighted. Lines break at sentence ends, pauses, cuts and length. */
-export function captionCues(words: Word[], keep: Set<number>, ranges: [number, number][]): Cue[] {
+export function captionCues(words: Word[], keep: Set<number>, ranges: Range[]): Cue[] {
   const spoken = [...keep].sort((a, b) => a - b).filter((i) => !words[i].text.startsWith("["));
   const lines: number[][] = [];
   spoken.forEach((i, k) => {
@@ -587,7 +624,7 @@ export const PAUSE_BLOCK = 0.3; // seconds of quiet that get their own block
 
 /** Each kept range split into one block per word, with longer pauses as
  *  blocks of their own. Blocks tile the range exactly (source seconds). */
-export function blocks(ranges: [number, number][], words: Word[]): Block[][] {
+export function blocks(ranges: Range[], words: Word[]): Block[][] {
   return ranges.map(([a, b]) => {
     const inside = words.flatMap((w, i) => {
       const mid = (w.start + w.end) / 2;
@@ -759,4 +796,90 @@ export function removeNote(e: Edits, index: number): Edits {
 /** Notes still to deal with: Luke's that have words and aren't done. */
 export function openNotes(e: Edits): { note: Note; index: number }[] {
   return (e.notes ?? []).flatMap((note, index) => (note.by === "you" && !note.done && note.text.trim() ? [{ note, index }] : []));
+}
+
+// --- Speed-ups, blurs and voice ----------------------------------------------
+
+export interface Rect {
+  x: number; // fractions of the frame
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Source seconds start..end played faster. */
+export interface SpeedFx {
+  start: number;
+  end: number;
+  rate: number;
+  by: "you" | "agent";
+  status?: AgentStatus;
+  reason?: string;
+}
+
+/** A box of the frame blurred out over source seconds start..end. */
+export interface BlurFx extends Rect {
+  start: number;
+  end: number;
+  by: "you" | "agent";
+  status?: AgentStatus;
+  reason?: string;
+}
+
+/** Polish for the whole voice track, applied on export. */
+export interface Voice {
+  level?: boolean; // even loudness
+  clean?: boolean; // less hiss and rumble
+}
+
+type Timed = { start: number; end: number; by: "you" | "agent"; status?: AgentStatus };
+type TimedList = "speeds" | "blurs";
+
+export function liveSpeeds(e: Edits): SpeedFx[] {
+  return (e.speeds ?? []).filter((s) => s.status !== "restored");
+}
+
+export function liveBlurs(e: Edits): BlurFx[] {
+  return (e.blurs ?? []).filter((s) => s.status !== "restored");
+}
+
+export function addSpeed(e: Edits, start: number, end: number, rate = 1.5): Edits {
+  const speeds = (e.speeds ?? []).filter((s) => s.status === "restored" || s.end <= start || s.start >= end);
+  return { ...e, speeds: [...speeds, { start, end, rate, by: "you" }], log: [...e.log, { at: now(), by: "you", op: "speed", note: `${rate}x` }] };
+}
+
+export function addBlur(e: Edits, start: number, end: number, box: Rect = { x: 0.35, y: 0.3, w: 0.3, h: 0.3 }): Edits {
+  return { ...e, blurs: [...(e.blurs ?? []), { start, end, ...box, by: "you" }], log: [...e.log, { at: now(), by: "you", op: "blur", note: "" }] };
+}
+
+/** Luke changes a speed-up or blur (times, rate, box). Claude's counts as kept once he does. */
+export function setTimed<K extends TimedList>(e: Edits, list: K, index: number, patch: Partial<NonNullable<Edits[K]>[number]>): Edits {
+  const items = (e[list] ?? []) as Timed[];
+  const item = items[index];
+  if (!item) return e;
+  const next = { ...item, ...patch, status: item.by === "agent" ? ("accepted" as const) : item.status };
+  if (next.end - next.start < 0.05) return e;
+  if (JSON.stringify(next) === JSON.stringify(item)) return e;
+  return { ...e, [list]: items.map((x, i) => (i === index ? next : x)), log: [...e.log, { at: now(), by: "you", op: `edit-${list}`, note: "" }] };
+}
+
+export function setTimedStatus(e: Edits, list: TimedList, index: number, status: AgentStatus): Edits {
+  const items = (e[list] ?? []) as Timed[];
+  const item = items[index];
+  if (!item || item.status === status) return e;
+  return { ...e, [list]: items.map((x, i) => (i === index ? { ...x, status } : x)), log: [...e.log, { at: now(), by: "you", op: `${status}-${list}`, note: "" }] };
+}
+
+/** Removes one. Claude's is kept as removed so it won't add it back. */
+export function removeTimed(e: Edits, list: TimedList, index: number): Edits {
+  const items = (e[list] ?? []) as Timed[];
+  const item = items[index];
+  if (!item) return e;
+  const next = item.by === "agent" ? items.map((x, i) => (i === index ? { ...x, status: "restored" as const } : x)) : items.filter((_, i) => i !== index);
+  return { ...e, [list]: next, log: [...e.log, { at: now(), by: "you", op: `remove-${list}`, note: "" }] };
+}
+
+export function setVoice(e: Edits, voice: Voice): Edits {
+  if (JSON.stringify(voice) === JSON.stringify(e.voice ?? {})) return e;
+  return { ...e, voice, log: [...e.log, { at: now(), by: "you", op: "voice", note: JSON.stringify(voice) }] };
 }

@@ -146,10 +146,11 @@ async fn export(
     source: String,
     segments: Vec<media::Segment>,
     overlays: Vec<media::Captions>,
+    voice: Option<media::Voice>,
     dest: String,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        media::export(Path::new(&source), &segments, &overlays, Path::new(&dest), |done| {
+        media::export(Path::new(&source), &segments, &overlays, voice.unwrap_or_default(), Path::new(&dest), |done| {
             let _ = app.emit("export-progress", done);
         })
     })

@@ -1,4 +1,4 @@
-import { ArrowUp, BookOpen, Captions, Film, MessageSquare, RotateCcw, Scissors, Square, Terminal, Type, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowUp, BookOpen, Captions, EyeOff, Film, Gauge, Mic, MessageSquare, RotateCcw, Scissors, Square, Terminal, Type, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../lib/backend";
 import { timecode, type Word } from "../lib/edl";
@@ -67,6 +67,33 @@ function Action({ m, words, onSeekWord }: { m: ChatMessage; words: Word[]; onSee
       <div className="action" onClick={() => Number.isInteger(Number(m.input?.at)) && onSeekWord(Number(m.input?.at))}>
         <MessageSquare size={13} />
         <span className="what">Left you a note: {String(m.input?.text ?? "")}</span>
+      </div>
+    );
+  if (m.tool === "speed_up" || m.tool === "blur")
+    return (
+      <div className="action" onClick={() => Number.isInteger(from) && onSeekWord(from)}>
+        {m.tool === "blur" ? <EyeOff size={13} /> : <Gauge size={13} />}
+        <span className="what">
+          {m.tool === "blur" ? "Blurred" : `Sped up ${Number(m.input?.rate) || ""}x`} "{span}" <span className="why">· {m.input?.reason ?? ""}</span>
+        </span>
+      </div>
+    );
+  if (m.tool === "remove_effect")
+    return (
+      <div className="action quiet">
+        {m.input?.kind === "blur" ? <EyeOff size={13} /> : <Gauge size={13} />} Took off its {m.input?.kind === "blur" ? "blur" : "speed-up"} on "{span}"
+      </div>
+    );
+  if (m.tool === "set_voice")
+    return (
+      <div className="action quiet">
+        <Mic size={13} /> {m.input?.polish ? "Voice polished on export" : "Voice as recorded"}
+      </div>
+    );
+  if (m.tool === "add_rule")
+    return (
+      <div className="action quiet">
+        <BookOpen size={13} /> Saved a rule: {String(m.input?.text ?? "")}
       </div>
     );
   if (m.tool === "Bash" || m.tool === "Write" || m.tool === "Read") {

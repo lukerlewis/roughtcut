@@ -4,7 +4,7 @@
 // has already jumped to the start of the next one and waits, paused. At the
 // cut they swap, so the seek happens off screen and joins don't stall.
 
-import { cutDuration, cutToSource, sourceToCut } from "./edl";
+import { cutDuration, cutToSource, sourceToCut, type Range } from "./edl";
 
 export interface PlayerState {
   playing: boolean;
@@ -17,7 +17,7 @@ export class CutPlayer {
   private active = 0;
   private index = 0;
   private raf = 0;
-  private ranges: [number, number][] = [];
+  private ranges: Range[] = [];
   playing = false;
   private quiet = false;
   onState: (s: PlayerState) => void = () => {};
@@ -52,7 +52,7 @@ export class CutPlayer {
     return sourceToCut(this.ranges, this.front.currentTime);
   }
 
-  setRanges(ranges: [number, number][]) {
+  setRanges(ranges: Range[]) {
     const t = this.time;
     this.ranges = ranges;
     if (!ranges.length) {
@@ -83,6 +83,9 @@ export class CutPlayer {
   private cue() {
     const next = this.ranges[this.index + 1];
     if (next && Math.abs(this.back.currentTime - next[0]) > 0.01) this.back.currentTime = next[0];
+    // Sped-up ranges play faster; the browser keeps the voice's pitch.
+    this.front.playbackRate = this.ranges[this.index]?.[2] || 1;
+    if (next) this.back.playbackRate = next[2] || 1;
   }
 
   /** Jump to a point in the cut. */
