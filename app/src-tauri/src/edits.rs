@@ -64,6 +64,9 @@ pub struct Clip {
     pub status: Option<String>, // pending | accepted | restored (removed)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// A swapped background's settings, so it can be changed and re-rendered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<Value>,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -260,6 +263,7 @@ pub fn add_clip(e: &mut Edits, file: &str, start: f64, end: f64, length: f64, re
         by: "agent".into(),
         status: Some("pending".into()),
         reason: Some(reason.into()),
+        background: None,
     });
     e.log.push(serde_json::json!({ "at": now(), "by": "agent", "op": "clip", "note": format!("{file} {start:.2}-{end:.2}: {reason}") }));
 }

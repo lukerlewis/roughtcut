@@ -1,6 +1,6 @@
-import { Check, EyeOff, Film, Gauge, MessageSquare, Send, Trash2, Type, X, ZoomIn } from "lucide-react";
+import { Check, EyeOff, Film, Gauge, ImageIcon, MessageSquare, Send, Trash2, Type, User, X, ZoomIn } from "lucide-react";
 import { useEffect, useState } from "react";
-import { TEXT_DEFAULTS, timecode, zoomSpan, type BlurFx, type Clip, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
+import { TEXT_DEFAULTS, timecode, zoomSpan, type Background, type BlurFx, type Clip, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
 
 export type Look = { scale: number; x: number; y: number };
 
@@ -10,6 +10,9 @@ interface Props {
   clip?: Clip;
   text?: TextFx;
   onText: (patch: Partial<TextFx>) => void; // saved as one change
+  onBackground: (b: Background) => void; // re-render with these settings
+  onChooseImage: () => Promise<string | null>;
+  rendering: number | null; // progress of a background being rendered
   speed?: SpeedFx;
   blur?: BlurFx;
   onTimed: (patch: Partial<SpeedFx & BlurFx>) => void;
@@ -287,8 +290,77 @@ function BlurSettings({ x, p }: { x: BlurFx; p: Props }) {
   );
 }
 
+function BackgroundSettings({ c, p }: { c: Clip; p: Props }) {
+  const [b, setB] = useState<Background>(c.background!);
+  useEffect(() => setB(c.background!), [c.background]);
+  const changed = JSON.stringify(b) !== JSON.stringify(c.background);
+  const ready = b.mode !== "image" || !!b.image;
+  return (
+    <div className="panel-body effect">
+      <div className="effect-head">
+        <User size={15} /> <span>Background</span>
+        {c.status === "pending" && <span className="dot" title="Claude's, not reviewed yet" />}
+      </div>
+      <p className="why">
+        {c.reason && (
+          <>
+            {c.reason}
+            <br />
+          </>
+        )}
+        <span className="mono">
+          {timecode(c.start, 30, true)} to {timecode(c.end, 30, true)}
+        </span>
+      </p>
+      <div className="seg wide">
+        {(["blur", "color", "image"] as const).map((m) => (
+          <button key={m} className={b.mode === m ? "on" : ""} onClick={() => setB({ ...b, mode: m })}>
+            {m === "blur" ? "Blur" : m === "color" ? "Colour" : "Picture"}
+          </button>
+        ))}
+      </div>
+      {b.mode === "blur" && (
+        <>
+          <label className="setting">
+            <span>Strength</span>
+            <span className="mono">{b.strength ?? 30}</span>
+          </label>
+          <input type="range" min={4} max={100} value={b.strength ?? 30} onChange={(e) => setB({ ...b, strength: Number(e.target.value) })} />
+        </>
+      )}
+      {b.mode === "color" && (
+        <label className="setting">
+          <span>Colour</span>
+          <input type="color" value={b.color ?? "#1f1f1f"} onChange={(e) => setB({ ...b, color: e.target.value })} />
+        </label>
+      )}
+      {b.mode === "image" && (
+        <div className="actions">
+          <button className="btn" onClick={() => p.onChooseImage().then((image) => image && setB({ ...b, image }))}>
+            <ImageIcon size={14} /> {b.image ? b.image.split("/").pop() : "Choose a picture…"}
+          </button>
+        </div>
+      )}
+      {p.rendering !== null ? (
+        <p className="hint">Cutting you out of the background… {Math.round(p.rendering * 100)}%</p>
+      ) : (
+        changed && (
+          <div className="actions">
+            <button className="btn" disabled={!ready} onClick={() => p.onBackground(b)}>
+              Apply
+            </button>
+          </div>
+        )
+      )}
+      <p className="hint">Done on your Mac. Drag the block's ends to change where it shows, and it renders the new stretch.</p>
+      <Status pending={c.status === "pending"} onKeep={p.onKeep} onRemove={p.onRemove} what="background" />
+    </div>
+  );
+}
+
 /** The settings of the effect picked on the timeline. */
 export function Effect(p: Props) {
+  if (p.clip?.background) return <BackgroundSettings c={p.clip} p={p} />;
   if (p.speed) return <SpeedSettings x={p.speed} p={p} />;
   if (p.blur) return <BlurSettings x={p.blur} p={p} />;
   if (p.note) return <NoteSettings n={p.note} p={p} />;

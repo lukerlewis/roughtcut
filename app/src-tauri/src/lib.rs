@@ -6,6 +6,7 @@
 mod claude;
 mod edits;
 mod mcp;
+mod matte;
 mod media;
 mod server;
 mod style;
@@ -180,6 +181,19 @@ async fn ask_claude(
     .map_err(|e| e.to_string())?
 }
 
+/// Renders a stretch of the recording with a new background; returns the
+/// clip's path inside the folder.
+#[tauri::command]
+async fn swap_background(app: AppHandle, folder: String, source: String, start: f64, end: f64, background: Value) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        matte::render(Path::new(&folder), Path::new(&source), start, end, &background, |p| {
+            let _ = app.emit("background-progress", p);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Luke's rules and settings, the same for every video.
 #[tauri::command]
 fn load_style() -> Value {
@@ -309,6 +323,7 @@ pub fn run() {
             ask_claude,
             stop_claude,
             load_style,
+            swap_background,
             save_style,
             suggest_rules,
             load_chat,

@@ -191,6 +191,21 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": { "polish": { "type": "boolean" } }, "required": ["polish"] },
         },
         {
+            "name": "swap_background",
+            "description": "Replace the background behind Luke while words from..to play, cut out on the Mac (it takes a moment): blurred more (strength 2-120, default 30), a solid colour (#rrggbb), or a picture file. Lands as a clip Luke can adjust and re-render.",
+            "inputSchema": {
+                "type": "object",
+                "properties": range(json!({
+                    "mode": { "type": "string", "enum": ["blur", "color", "image"] },
+                    "strength": { "type": "number" },
+                    "color": { "type": "string" },
+                    "image": { "type": "string", "description": "Full path to a picture." },
+                    "reason": { "type": "string" },
+                })),
+                "required": ["from", "to", "mode", "reason"],
+            },
+        },
+        {
             "name": "remove_text",
             "description": "Take your text overlapping words from..to off the screen.",
             "inputSchema": { "type": "object", "properties": range(json!({})), "required": ["from", "to"] },
@@ -350,6 +365,28 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             e.log.push(json!({ "at": edits::now(), "by": "agent", "op": name, "note": reason }));
             edits::save(folder, &e)?;
             Ok(format!("Added a {} over {a}-{b}. Luke will see it in blue until he reviews it.", if name == "speed_up" { "speed-up" } else { "blur" }))
+        }
+        "swap_background" => {
+            let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
+            if a > b {
+                return Err("`from` must not be after `to`".into());
+            }
+            let reason = args["reason"].as_str().filter(|r| !r.trim().is_empty()).ok_or("Give a short `reason`.")?.trim();
+            let recording = std::env::var("ROUGHCUT_RECORDING").map_err(|_| "This only works from inside Roughcut.".to_string())?;
+            let mut settings = json!({ "mode": args["mode"].as_str().unwrap_or("blur") });
+            for k in ["strength", "color", "image"] {
+                if !args[k].is_null() {
+                    settings[k] = args[k].clone();
+                }
+            }
+            let (start, end) = (words[a].start, words[b].end);
+            let rel = crate::matte::render(folder, Path::new(&recording), start, end, &settings, |_| ())?;
+            edits::add_clip(&mut e, &rel, start, end, end - start, reason);
+            if let Some(c) = e.clips.last_mut() {
+                c.background = Some(settings);
+            }
+            edits::save(folder, &e)?;
+            Ok(format!("Swapped the background over {a}-{b}. Luke will see it in blue until he reviews it."))
         }
         "remove_effect" => {
             let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
@@ -565,7 +602,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 17);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 18);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");

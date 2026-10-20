@@ -16,6 +16,9 @@ import {
   acceptAll,
   addText,
   addNote,
+  addBackground,
+  rerenderBackground,
+  type Background,
   addSpeed,
   addBlur,
   setTimed,
@@ -461,6 +464,39 @@ export default function App() {
     setSelection(null);
     setTimeout(() => pickEffect({ kind: "text", index }), 0);
   };
+  // Background swap: rendered on the Mac by a small helper, then played as a clip.
+  const [rendering, setRendering] = useState<number | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    const off = backend.listen<number>("background-progress", (p) => setRendering(p));
+    return () => void off.then((f) => f());
+  }, []);
+  const renderBackground = async (bg: Background, at: { start: number; end: number; index?: number }) => {
+    if (!project || rendering !== null) return;
+    player.current?.pause();
+    setRendering(0);
+    try {
+      const file = await backend.swapBackground(project.folder, project.source, at.start, at.end, bg);
+      if (at.index === undefined) {
+        const index = edits?.clips?.length ?? 0;
+        change((x) => addBackground(x, file, at.start, at.end, bg));
+        setTimeout(() => pickEffect({ kind: "clip", index }), 0);
+      } else {
+        const i = at.index;
+        change((x) => rerenderBackground(x, i, file, bg));
+      }
+    } catch (e) {
+      setNotice(String(e).replace(/^Error: /, ""));
+    } finally {
+      setRendering(null);
+    }
+  };
+  const newBackground = () => {
+    const span = spanForNew();
+    if (span && span[1] - span[0] > 0.1) void renderBackground({ mode: "blur", strength: 30 }, { start: span[0], end: span[1] });
+    setSelection(null);
+  };
+
   // Speed-ups and blurs: over the selected words, or a few seconds from the playhead.
   const spanForNew = (): [number, number] | null => {
     if (!project) return null;
@@ -585,6 +621,9 @@ export default function App() {
       } else if (!mod && e.key.toLowerCase() === "s") {
         e.preventDefault();
         newTimed("speed");
+      } else if (!mod && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        newBackground();
       } else if (!mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
         newTimed("blur");
@@ -727,7 +766,7 @@ export default function App() {
       <div className="main">
         <div className="panel">
           <div className="panel-head">
-            Transcript <span className="meta">Select words, then ⌫ cut, Z zoom, S speed up, B blur.</span>
+            Transcript <span className="meta">Select words, then ⌫ cut, Z zoom, S speed up, B blur, G background.</span>
           </div>
           <Transcript
             words={words}
@@ -797,6 +836,11 @@ export default function App() {
                   style={{ left: `${box.left * 100}%`, top: `${box.top * 100}%`, width: `${box.size * 100}%`, height: `${box.size * 100}%` }}
                 />
               )}
+              {(notice || (rendering !== null && !pickedClip?.background)) && (
+                <div className="toast" onClick={() => setNotice(null)}>
+                  {notice ?? `Cutting you out of the background… ${Math.round((rendering ?? 0) * 100)}%`}
+                </div>
+              )}
               {cue && !showingRemoved && (
                 <div className={`caption ${captions.style}`}>
                   <span>
@@ -856,6 +900,9 @@ export default function App() {
               clip={pickedClip}
               text={pickedText}
               onText={(patch) => effect && change((x) => setText(x, effect.index, patch))}
+              onBackground={(bg) => effect && pickedClip && void renderBackground(bg, { start: pickedClip.start, end: pickedClip.end, index: effect.index })}
+              onChooseImage={backend.chooseImage}
+              rendering={rendering}
               speed={pickedSpeed}
               blur={pickedBlur}
               onTimed={(patch) => effect && change((x) => setTimed(x, effect.kind === "speed" ? "speeds" : "blurs", effect.index, patch))}
@@ -930,7 +977,13 @@ export default function App() {
         fps={project.info.fps}
         words={words}
         tracks={tracks}
-        onFxEdit={(fx, start, end, mode) => change((x) => moveEffect(x, words, fx, start, end, mode))}
+        onFxEdit={(fx, start, end, mode) => {
+          change((x) => moveEffect(x, words, fx, start, end, mode));
+          // A background stretched past what was rendered is rendered again.
+          const c = fx.kind === "clip" ? edits.clips?.[fx.index] : undefined;
+          if (c?.background && (start < c.start - c.offset - 0.01 || end > c.start - c.offset + c.length + 0.01))
+            void renderBackground(c.background, { start, end, index: fx.index });
+        }}
         pins={(edits.notes ?? []).map((n, index) => ({ index, at: n.at, done: !!n.done, forClaude: n.by === "you" }))}
         onPin={(index) => pickEffect({ kind: "note", index })}
         effect={effect}

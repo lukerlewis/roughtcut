@@ -35,13 +35,13 @@ export function effectTracks(e: Edits, words: Word[]): FxTrack[] {
           effect: { kind: "clip", index },
           start: c.start,
           end: c.end,
-          label: c.reason || c.file.split("/").pop() || "Clip",
+          label: c.background ? `Background: ${c.background.mode === "blur" ? "blurred" : c.background.mode === "color" ? "colour" : "picture"}` : c.reason || c.file.split("/").pop() || "Clip",
           pending: c.status === "pending",
-          icon: "film" as const,
+          icon: c.background ? ("layout" as const) : ("film" as const),
           bounds: [c.start - c.offset, c.start - c.offset + c.length] as [number, number],
         }],
   );
-  if (clips.length) tracks.push({ name: "Claude clips", items: clips });
+  if (clips.length) tracks.push({ name: "Clips", items: clips });
   const texts: FxItem[] = (e.texts ?? []).flatMap((t, index) =>
     t.status === "restored"
       ? []

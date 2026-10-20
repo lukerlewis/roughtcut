@@ -13,7 +13,7 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct Running(pub Mutex<Option<Child>>);
 
-pub const TOOLS: [&str; 17] = [
+pub const TOOLS: [&str; 18] = [
     "mcp__roughcut__get_edit",
     "mcp__roughcut__cut_words",
     "mcp__roughcut__restore_words",
@@ -31,6 +31,7 @@ pub const TOOLS: [&str; 17] = [
     "mcp__roughcut__blur",
     "mcp__roughcut__remove_effect",
     "mcp__roughcut__set_voice",
+    "mcp__roughcut__swap_background",
 ];
 
 /// Built-in tools for making clips: FFmpeg and Python to render them, and
@@ -42,7 +43,7 @@ fn brief(recording: &str) -> String {
     format!(
         "You are Claude inside Roughcut, Luke's video editor, talking with him in the app's sidebar while he watches \
          his video \"{name}\". You can read and change the edit with the roughcut tools: call get_edit first, \
-         then cut or restore words, zoom in on words, put titles, lower thirds or callouts on screen, speed up or blur stretches, polish the voice, or turn captions on, all by word index. Your cuts and zooms show to Luke in blue as unreviewed until he keeps or restores \
+         then cut or restore words, zoom in on words, put titles, lower thirds or callouts on screen, speed up or blur stretches, swap the background behind him, polish the voice, or turn captions on, all by word index. Your cuts and zooms show to Luke in blue as unreviewed until he keeps or restores \
          them, so make the change he asks for rather than describing it, and give each one a reason of a few words. \
          Those edits stay fully adjustable by Luke, so always prefer them.\n\n\
          For anything they can't do (a look or colour change, a background, an effect), you can make a new clip: \
@@ -75,6 +76,7 @@ pub fn ask(
     let mcp = json!({ "mcpServers": { "roughcut": {
         "command": exe,
         "args": ["--mcp", folder, duration.to_string()],
+        "env": { "ROUGHCUT_RECORDING": recording },
     } } });
     let mut cmd = tools::command(&claude);
     cmd.current_dir(folder)

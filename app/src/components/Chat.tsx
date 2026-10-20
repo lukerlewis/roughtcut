@@ -1,4 +1,4 @@
-import { ArrowUp, BookOpen, Captions, EyeOff, Film, Gauge, Mic, MessageSquare, RotateCcw, Scissors, Square, Terminal, Type, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowUp, BookOpen, Captions, EyeOff, Film, Gauge, Mic, MessageSquare, RotateCcw, Scissors, Square, Terminal, Type, User, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../lib/backend";
 import { timecode, type Word } from "../lib/edl";
@@ -75,6 +75,15 @@ function Action({ m, words, onSeekWord }: { m: ChatMessage; words: Word[]; onSee
         {m.tool === "blur" ? <EyeOff size={13} /> : <Gauge size={13} />}
         <span className="what">
           {m.tool === "blur" ? "Blurred" : `Sped up ${Number(m.input?.rate) || ""}x`} "{span}" <span className="why">· {m.input?.reason ?? ""}</span>
+        </span>
+      </div>
+    );
+  if (m.tool === "swap_background")
+    return (
+      <div className="action" onClick={() => Number.isInteger(from) && onSeekWord(from)}>
+        <User size={13} />
+        <span className="what">
+          Swapped the background on "{span}" <span className="why">· {m.input?.reason ?? ""}</span>
         </span>
       </div>
     );

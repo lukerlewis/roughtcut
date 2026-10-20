@@ -291,3 +291,20 @@ export async function suggestRules(folder: string): Promise<Suggestion[]> {
   }
   return invoke<Suggestion[]>("suggest_rules", { folder });
 }
+
+export async function chooseImage(): Promise<string | null> {
+  if (!inApp) return "/fixtures/background.jpg";
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({ multiple: false, directory: false, filters: [{ name: "Picture", extensions: ["jpg", "jpeg", "png", "heic", "webp"] }] });
+  return typeof picked === "string" ? picked : null;
+}
+
+/** Renders source seconds start..end with a new background behind Luke (on
+ *  the Mac, with Apple's Vision). Returns the clip's path in the folder. */
+export async function swapBackground(folder: string, source: string, start: number, end: number, background: object): Promise<string> {
+  if (!inApp) {
+    await new Promise((r) => setTimeout(r, 500));
+    return "clips/bw.webm";
+  }
+  return invoke<string>("swap_background", { folder, source, start, end, background });
+}

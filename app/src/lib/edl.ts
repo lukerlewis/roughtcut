@@ -74,6 +74,29 @@ export interface Clip {
   by: "you" | "agent";
   status?: AgentStatus; // Claude's clips: unreviewed until Luke keeps or removes ("restored") them
   reason?: string;
+  background?: Background; // a swapped background, re-rendered when its settings change
+}
+
+export interface Background {
+  mode: "blur" | "color" | "image";
+  strength?: number; // blur
+  color?: string; // #rrggbb
+  image?: string; // a picture's full path
+}
+
+/** Luke swaps the background over source seconds start..end; `file` is the rendered clip. */
+export function addBackground(e: Edits, file: string, start: number, end: number, background: Background): Edits {
+  const clips = (e.clips ?? []).map((c) => (c.status !== "restored" && c.start < end && c.end > start && c.by === "agent" ? { ...c, status: "restored" as const } : c));
+  const clip: Clip = { file, start, end, offset: 0, length: end - start, by: "you", background };
+  return { ...e, clips: [...clips, clip], log: [...e.log, { at: now(), by: "you", op: "background", note: background.mode }] };
+}
+
+/** A background clip re-rendered with new settings over its current times. */
+export function rerenderBackground(e: Edits, index: number, file: string, background: Background): Edits {
+  const c = e.clips?.[index];
+  if (!c) return e;
+  const next: Clip = { ...c, file, offset: 0, length: c.end - c.start, background, status: c.by === "agent" ? "accepted" : c.status };
+  return { ...e, clips: e.clips!.map((x, i) => (i === index ? next : x)), log: [...e.log, { at: now(), by: "you", op: "edit-background", note: background.mode }] };
 }
 
 export interface Edits {
