@@ -66,6 +66,7 @@ const Para = memo(function Para(props: {
               data-i={i}
               onMouseDown={(e) => {
                 e.preventDefault();
+                (document.activeElement as HTMLElement | null)?.blur(); // so keys go to the edit, not a text box
                 props.onDown(i, e.shiftKey);
               }}
               onMouseEnter={() => props.onEnter(i)}

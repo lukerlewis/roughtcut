@@ -13,7 +13,7 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct Running(pub Mutex<Option<Child>>);
 
-pub const TOOLS: [&str; 21] = [
+pub const TOOLS: [&str; 23] = [
     "mcp__roughcut__get_edit",
     "mcp__roughcut__cut_words",
     "mcp__roughcut__restore_words",
@@ -35,6 +35,8 @@ pub const TOOLS: [&str; 21] = [
     "mcp__roughcut__set_layout",
     "mcp__roughcut__zoom_to_clicks",
     "mcp__roughcut__cut_retakes",
+    "mcp__roughcut__save_version",
+    "mcp__roughcut__open_version",
 ];
 
 /// Built-in tools for making clips: FFmpeg and Python to render them, and
@@ -60,6 +62,8 @@ fn brief(recording: &str) -> String {
          with resolve_note and a short reply. To point something out for him to decide, leave a note with add_note.\n\n\
          When Luke says to always or never do something in his videos, save it as a rule with add_rule (in his voice, one line), \
          then apply it here too.\n\n\
+         Luke can keep named versions of the edit: save_version saves the current one, open_version switches to one. \
+         When he asks for alternatives (other openings, a tighter cut), save each as its own version and finish on the edit he started from.\n\n\
          Don't re-cut anything he restored unless he asks. Luke isn't technical: reply in a sentence or two of plain \
          English, and give times like 00:12 so he can find things."
     )

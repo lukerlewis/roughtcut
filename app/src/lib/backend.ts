@@ -369,3 +369,47 @@ export async function renderLayout(folder: string, source: string, start: number
   }
   return invoke<string>("render_layout", { folder, source, start, end, mode });
 }
+
+// --- Versions --------------------------------------------------------------
+
+export interface Version {
+  id: string;
+  name: string;
+  at: string;
+  by: "you" | "agent";
+  length: number;
+  note?: string | null;
+}
+
+// In a plain browser, versions live in localStorage.
+const mockVersions = (): Record<string, Version & { edits: Edits }> => JSON.parse(localStorage.getItem("roughcut-versions") ?? "{}");
+
+export async function listVersions(folder: string): Promise<Version[]> {
+  if (!inApp) return Object.values(mockVersions()).map(({ edits: _, ...v }) => v).sort((a, b) => a.at.localeCompare(b.at));
+  return invoke<Version[]>("list_versions", { folder });
+}
+
+export async function saveVersion(folder: string, name: string, edits: Edits, length: number): Promise<string> {
+  if (!inApp) {
+    const all = mockVersions();
+    const id = Object.values(all).find((v) => v.name.toLowerCase() === name.trim().toLowerCase())?.id ?? name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    all[id] = { id, name: name.trim(), at: new Date().toISOString(), by: "you", length, edits };
+    localStorage.setItem("roughcut-versions", JSON.stringify(all));
+    return id;
+  }
+  return invoke<string>("save_version", { folder, name, edits, length });
+}
+
+export async function openVersion(folder: string, id: string): Promise<Edits> {
+  if (!inApp) return mockVersions()[id].edits;
+  return invoke<Edits>("open_version", { folder, id });
+}
+
+export async function deleteVersion(folder: string, id: string): Promise<void> {
+  if (!inApp) {
+    const all = mockVersions();
+    delete all[id];
+    return localStorage.setItem("roughcut-versions", JSON.stringify(all));
+  }
+  return invoke("delete_version", { folder, id });
+}

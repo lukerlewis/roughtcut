@@ -1,4 +1,4 @@
-import { ArrowUp, BookOpen, Captions, EyeOff, Film, Gauge, LayoutPanelLeft, Mic, MousePointerClick, MessageSquare, RotateCcw, Scissors, Square, Terminal, Type, User, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowUp, BookOpen, Captions, EyeOff, Film, Gauge, History, LayoutPanelLeft, Mic, MousePointerClick, MessageSquare, RotateCcw, Scissors, Square, Terminal, Type, User, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../lib/backend";
 import { timecode, type Word } from "../lib/edl";
@@ -96,6 +96,12 @@ function Action({ m, words, onSeekWord }: { m: ChatMessage; words: Word[]; onSee
         <span className="what">
           Changed the layout to {LAYOUT_LABELS[String(m.input?.mode)] ?? String(m.input?.mode ?? "")} on "{span}" <span className="why">· {m.input?.reason ?? ""}</span>
         </span>
+      </div>
+    );
+  if (m.tool === "save_version" || m.tool === "open_version")
+    return (
+      <div className="action quiet">
+        <History size={13} /> {m.tool === "save_version" ? "Saved version" : "Opened version"} "{String(m.input?.name ?? "")}"
       </div>
     );
   if (m.tool === "cut_retakes")

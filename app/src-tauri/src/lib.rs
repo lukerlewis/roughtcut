@@ -14,6 +14,7 @@ mod server;
 mod style;
 mod tools;
 mod update;
+mod versions;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -129,6 +130,26 @@ fn save_edits(folder: String, edits: Value) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&edits).map_err(|e| e.to_string())?;
     fs::write(&tmp, text).map_err(|e| format!("Couldn't save: {e}"))?;
     fs::rename(&tmp, dir.join("edits.json")).map_err(|e| format!("Couldn't save: {e}"))
+}
+
+#[tauri::command]
+fn list_versions(folder: String) -> Value {
+    Value::Array(versions::list(Path::new(&folder)))
+}
+
+#[tauri::command]
+fn save_version(folder: String, name: String, edits: Value, length: f64) -> Result<String, String> {
+    versions::save(Path::new(&folder), &name, &edits, length, "you", None)
+}
+
+#[tauri::command]
+fn open_version(folder: String, id: String) -> Result<Value, String> {
+    versions::load(Path::new(&folder), &id)
+}
+
+#[tauri::command]
+fn delete_version(folder: String, id: String) -> Result<(), String> {
+    versions::remove(Path::new(&folder), &id)
 }
 
 #[tauri::command]
@@ -373,6 +394,10 @@ pub fn run() {
             run_rough_cut,
             load_cut,
             save_edits,
+            list_versions,
+            save_version,
+            open_version,
+            delete_version,
             probe,
             waveform,
             export,

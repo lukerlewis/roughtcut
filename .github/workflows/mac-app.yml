@@ -6,6 +6,11 @@ on:
     paths: ["app/**", "roughcut/**", "tests/**", ".github/workflows/mac-app.yml"]
   workflow_dispatch:
 
+# One build at a time per branch; a newer push replaces any build still waiting.
+concurrency:
+  group: mac-app-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   python:
     runs-on: ubuntu-latest

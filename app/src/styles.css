@@ -304,7 +304,7 @@ button.action:hover { background: var(--muted); }
   color: var(--foreground); font: inherit; font-size: 12px; outline: none;
 }
 .style .rule-text:focus { border-color: var(--stroke); background: var(--card); }
-.style .add-rule { display: flex; gap: 6px; }
+.style .add-rule, .versions .add-rule { display: flex; gap: 6px; }
 .style .learn { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--stroke); }
 .style .learn > .btn { align-self: flex-start; }
 .style .idea { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--stroke); border-radius: 10px; font-size: 12px; }
@@ -349,3 +349,13 @@ button.action:hover { background: var(--muted); }
 @media (max-width: 1400px) {
   .toolbar .lbl { display: none; }
 }
+/* Versions: saved snapshots of the edit */
+.versions .version-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.versions .version-list li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--stroke); border-radius: 10px; font-size: 12px; }
+.versions .version-list li.current { border-color: var(--stroke-strong); background: var(--card); }
+.versions .version-list .what { flex: 1; min-width: 0; }
+.versions .version-list .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.versions .version-list .meta { color: var(--subtle-foreground); margin-top: 2px; }
+.versions .tag { font-size: 11px; color: var(--subtle-foreground); padding: 0 6px; }
+.versions .learn { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--stroke); }
+.versions .learn > .btn { align-self: flex-start; }

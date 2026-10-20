@@ -225,6 +225,16 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": {} },
         },
         {
+            "name": "save_version",
+            "description": "Save the current edit as a named version Luke can switch to from his Versions list (\"Claude cut\", \"Tighter\", \"Hook 2: the question\"). Saving under an existing name replaces it.",
+            "inputSchema": { "type": "object", "properties": { "name": { "type": "string" }, "note": { "type": "string", "description": "One line on what's different, shown to Luke." } }, "required": ["name"] },
+        },
+        {
+            "name": "open_version",
+            "description": "Replace the current edit with a saved version (by name), to branch from it. Save the current edit first if it isn't saved.",
+            "inputSchema": { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"] },
+        },
+        {
             "name": "remove_text",
             "description": "Take your text overlapping words from..to off the screen.",
             "inputSchema": { "type": "object", "properties": range(json!({})), "required": ["from", "to"] },
@@ -260,7 +270,26 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
     let n = words.len();
     let text = |a: usize, b: usize| words[a..=b].iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
     match name {
-        "get_edit" => Ok(describe(&words, &e, duration)),
+        "get_edit" => {
+            let saved: Vec<String> = crate::versions::list(folder).iter().map(|v| format!("\"{}\" ({:.1}s)", v["name"].as_str().unwrap_or(""), v["length"].as_f64().unwrap_or(0.0))).collect();
+            let versions = if saved.is_empty() { String::new() } else { format!("Saved versions: {}.\n", saved.join(", ")) };
+            Ok(describe(&words, &e, duration) + &versions)
+        }
+        "save_version" => {
+            let name = args["name"].as_str().filter(|t| !t.trim().is_empty()).ok_or("Give the version a `name`.")?;
+            let length = edits::kept_length(&words, &edits::kinds(n, &e), duration);
+            let value = serde_json::to_value(&e).map_err(|e| e.to_string())?;
+            crate::versions::save(folder, name, &value, length, "agent", args["note"].as_str())?;
+            Ok(format!("Saved the edit as \"{}\" ({length:.1}s).", name.trim()))
+        }
+        "open_version" => {
+            let name = args["name"].as_str().ok_or("Give the version's `name`.")?;
+            let v = crate::versions::load(folder, name)?;
+            let opened: edits::Edits = serde_json::from_value(v).map_err(|e| e.to_string())?;
+            edits::save(folder, &opened)?;
+            let length = edits::kept_length(&words, &edits::kinds(n, &opened), duration);
+            Ok(format!("Opened \"{}\": the edit is now that version ({length:.1}s).", name.trim()))
+        }
         "cut_words" | "restore_words" => {
             let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
             if a > b {
@@ -688,7 +717,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 21);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 23);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");
@@ -699,6 +728,15 @@ mod tests {
         let saved: Value = serde_json::from_str(&fs::read_to_string(dir.join("edits.json")).unwrap()).unwrap();
         assert_eq!(saved["agent"].as_array().unwrap().len(), 2);
         assert_eq!(saved["agent"][1]["status"], "pending");
+
+        rpc(&dir, "tools/call", json!({ "name": "save_version", "arguments": { "name": "Without for" } }));
+        rpc(&dir, "tools/call", json!({ "name": "restore_words", "arguments": { "from": 5, "to": 5 } }));
+        let opened = rpc(&dir, "tools/call", json!({ "name": "open_version", "arguments": { "name": "without for" } }));
+        assert!(opened["content"][0]["text"].as_str().unwrap().starts_with("Opened"), "{opened}");
+        let saved: Value = serde_json::from_str(&fs::read_to_string(dir.join("edits.json")).unwrap()).unwrap();
+        assert_eq!(saved["agent"][1]["status"], "pending");
+        let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
+        assert!(edit["content"][0]["text"].as_str().unwrap().contains("Saved versions: \"Without for\""));
 
         rpc(&dir, "tools/call", json!({ "name": "restore_words", "arguments": { "from": 1, "to": 1 } }));
         let saved: Value = serde_json::from_str(&fs::read_to_string(dir.join("edits.json")).unwrap()).unwrap();

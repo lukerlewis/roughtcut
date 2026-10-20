@@ -1,10 +1,11 @@
-import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, EyeOff, Gauge, LayoutPanelLeft, MessageSquarePlus, MessageSquareX, MousePointerClick, Mic, Plus, User, ZoomIn, Scissors, SkipBack, Type } from "lucide-react";
+import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, EyeOff, Gauge, LayoutPanelLeft, MessageSquarePlus, MessageSquareX, Sparkles, MousePointerClick, Mic, Plus, User, ZoomIn, Scissors, SkipBack, Type } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
 import { Style } from "./components/Style";
 import { Record } from "./components/Record";
 import { Menu } from "./components/Menu";
+import { Versions } from "./components/Versions";
 import { Effect, type Look } from "./components/Effect";
 import { Timeline, type Effect as Picked } from "./components/Timeline";
 import { Transcript, type Selection } from "./components/Transcript";
@@ -96,7 +97,7 @@ export default function App() {
   const [state, setState] = useState<PlayerState>({ playing: false, time: 0, source: 0 });
   const [exporting, setExporting] = useState<{ progress: number; dest: string; done: boolean; error?: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [tab, setTab] = useState<"changes" | "chat" | "effect" | "style">("changes");
+  const [tab, setTab] = useState<"changes" | "chat" | "effect" | "style" | "versions">("changes");
   const [effect, setEffect] = useState<Picked | null>(null); // the zoom or clip whose settings show
   const [look, setLook] = useState<Look | null>(null); // a zoom change being dragged, not yet saved
   const [chat, setChat] = useState<backend.Chat>({ session: null, messages: [] });
@@ -235,6 +236,7 @@ export default function App() {
 
   // --- Claude in the sidebar ----------------------------------------------
 
+  const [claudeChanged, setClaudeChanged] = useState(0); // counts Claude's changes, so lists reload
   const projectRef = useRef(project);
   projectRef.current = project;
 
@@ -253,6 +255,7 @@ export default function App() {
       } else if (e.type === "user") {
         const changed = (e.message?.content ?? []).some((b: any) => b.type === "tool_result" && !b.is_error);
         const folder = projectRef.current?.folder;
+        if (changed) setClaudeChanged((n) => n + 1);
         if (changed && folder)
           backend.loadCut(folder).then((l) => l.edits && change((prev) => (JSON.stringify(prev) === JSON.stringify(l.edits) ? prev : l.edits!)));
       } else if (e.type === "result" && e.is_error) add({ role: "error", text: String(e.result ?? "Claude stopped.") });
@@ -280,6 +283,20 @@ export default function App() {
         return c;
       });
     }
+  };
+
+  // Alternative openings, each saved as a version for Luke to compare.
+  const hooks = () => {
+    setTab("chat");
+    void ask(
+      "Cut three alternative openings (hooks) for this video. First save the current edit as a version named \"Before hooks\". " +
+        "For each hook, open_version \"Before hooks\", then change only how the video opens (roughly its first 5 to 15 seconds): you can't move lines, " +
+        "so choose where it starts and what's trimmed from the intro, for example starting on the most striking line, a question or the result. " +
+        "Save each with save_version as \"Hook 1: <a few words>\" (then 2 and 3) with a one-line note. Finish by opening \"Before hooks\" again, " +
+        "and tell me in a sentence each what the three hooks do.",
+      edits,
+      "Try three other openings for this video.",
+    );
   };
 
   // Claude's rough cut, when Luke asks for it. Its cuts arrive unreviewed, in blue.
@@ -817,6 +834,7 @@ export default function App() {
           items={[
             { label: "Claude's rough cut", icon: <Scissors size={14} />, disabled: !!cutting, onClick: roughCut },
             { label: "Takes I marked (\u201ccut that\u201d)", icon: <MessageSquareX size={14} />, onClick: cutRetakes },
+            { label: "Other openings (hooks)", icon: <Sparkles size={14} />, disabled: asking, onClick: hooks },
           ]}
         />
         <Menu
@@ -985,6 +1003,9 @@ export default function App() {
             <button className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}>
               Ask Claude {asking && <span className="pulse" />}
             </button>
+            <button className={tab === "versions" ? "on" : ""} onClick={() => setTab("versions")}>
+              Versions
+            </button>
             <button className={tab === "style" ? "on" : ""} onClick={() => setTab("style")}>
               Style
             </button>
@@ -1002,6 +1023,16 @@ export default function App() {
           </div>
           {tab === "style" ? (
             <Style folder={project.folder} />
+          ) : tab === "versions" ? (
+            <Versions
+              folder={project.folder}
+              edits={edits}
+              length={cutDuration(ranges)}
+              reload={claudeChanged}
+              onOpen={(next) => change(() => next)}
+              onHooks={hooks}
+              busy={asking}
+            />
           ) : tab === "effect" && pickedAny ? (
             <Effect
               key={effect ? `${effect.kind}:${effect.index}` : ""}
