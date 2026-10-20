@@ -5,6 +5,7 @@
 import type { Effect, FxItem, FxMode, FxTrack } from "../components/Timeline";
 import {
   removeClip,
+  removeNote,
   removeText,
   removeZoom,
   setClipStatus,
@@ -91,6 +92,8 @@ export function removeEffect(e: Edits, fx: Effect): Edits {
       return removeClip(e, fx.index);
     case "text":
       return removeText(e, fx.index);
+    case "note":
+      return removeNote(e, fx.index);
   }
   return e;
 }
@@ -100,6 +103,10 @@ export function effectStart(e: Edits, words: Word[], fx: Effect): number | null 
   if (fx.kind === "zoom") {
     const z = e.zooms?.[fx.index];
     return z ? zoomSpan(words, z)[0] + 0.05 : null;
+  }
+  if (fx.kind === "note") {
+    const n = e.notes?.[fx.index];
+    return n ? n.at : null;
   }
   const list = fx.kind === "clip" ? e.clips : fx.kind === "text" ? e.texts : undefined;
   const item = list?.[fx.index];

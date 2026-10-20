@@ -133,6 +133,24 @@ fn tools() -> Value {
             },
         },
         {
+            "name": "resolve_note",
+            "description": "Mark one of Luke's notes done once you've dealt with it, with a one-sentence reply he'll see on the note.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "note": { "type": "integer", "description": "The note's number from get_edit." }, "reply": { "type": "string" } },
+                "required": ["note", "reply"],
+            },
+        },
+        {
+            "name": "add_note",
+            "description": "Pin a note for Luke at word `at`: something for him to look at or decide, not a change you could just make.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "at": { "type": "integer", "description": "Word index." }, "text": { "type": "string" } },
+                "required": ["at", "text"],
+            },
+        },
+        {
             "name": "remove_text",
             "description": "Take your text overlapping words from..to off the screen.",
             "inputSchema": { "type": "object", "properties": range(json!({})), "required": ["from", "to"] },
@@ -265,6 +283,22 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             edits::save(folder, &e)?;
             Ok(format!("Added a {style} \"{}\" over {a}-{b} ({start:.2}-{end:.2}s). Luke will see it in blue until he reviews it.", text.trim()))
         }
+        "resolve_note" => {
+            let i = args["note"].as_u64().ok_or("`note` must be a note number")? as usize;
+            let reply = args["reply"].as_str().filter(|r| !r.trim().is_empty()).ok_or("Give a short `reply`.")?;
+            let note = edits::notes(&mut e).get_mut(i).ok_or_else(|| format!("There's no note {i}. Call get_edit for the list."))?;
+            note["done"] = Value::Bool(true);
+            note["reply"] = Value::String(reply.trim().into());
+            edits::save(folder, &e)?;
+            Ok(format!("Marked note {i} done."))
+        }
+        "add_note" => {
+            let at = index(args, "at", n)?;
+            let text = args["text"].as_str().filter(|t| !t.trim().is_empty()).ok_or("Give the note's `text`.")?;
+            edits::notes(&mut e).push(json!({ "at": words[at].start, "text": text.trim(), "by": "agent" }));
+            edits::save(folder, &e)?;
+            Ok(format!("Left Luke a note at word {at}."))
+        }
         "remove_text" => {
             let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
             let (start, end) = (words[a].start, words[b.max(a)].end);
@@ -367,6 +401,16 @@ fn describe(words: &[edits::Word], e: &edits::Edits, duration: f64) -> String {
             );
         }
     }
+    let notes = e.other.get("notes").and_then(Value::as_array).cloned().unwrap_or_default();
+    if !notes.is_empty() {
+        s += "Notes pinned to moments (source seconds):\n";
+        for (i, note) in notes.iter().enumerate() {
+            let at = note["at"].as_f64().unwrap_or(0.0);
+            let near = words.iter().position(|w| w.end >= at).unwrap_or(0);
+            let who = if note["by"] == "agent" { "yours, for Luke" } else if note["done"] == true { "Luke's, done" } else { "Luke's, open" };
+            s += &format!("note {i} at {at:.2}s, near word {near} ({who}): {}\n", note["text"].as_str().unwrap_or(""));
+        }
+    }
     let clips: Vec<_> = e.clips.iter().filter(|c| c.status.as_deref() != Some("restored")).collect();
     if !clips.is_empty() {
         s += "Clips on the timeline (playing instead of the recording):\n";
@@ -411,7 +455,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 10);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 12);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");
@@ -442,6 +486,12 @@ mod tests {
         rpc(&dir, "tools/call", json!({ "name": "remove_text", "arguments": { "from": 7, "to": 7 } }));
         let saved: Value = serde_json::from_str(&fs::read_to_string(dir.join("edits.json")).unwrap()).unwrap();
         assert_eq!(saved["texts"][0]["status"], "restored");
+
+        rpc(&dir, "tools/call", json!({ "name": "add_note", "arguments": { "at": 3, "text": "Retake?" } }));
+        let r = rpc(&dir, "tools/call", json!({ "name": "resolve_note", "arguments": { "note": 0, "reply": "Done" } }));
+        assert_eq!(r["content"][0]["text"], "Marked note 0 done.");
+        let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
+        assert!(edit["content"][0]["text"].as_str().unwrap().contains("note 0 at 1.50s, near word 3 (yours, for Luke): Retake?"), "{edit}");
 
         let bad = rpc(&dir, "tools/call", json!({ "name": "cut_words", "arguments": { "from": 3, "to": 99, "reason": "x" } }));
         assert_eq!(bad["isError"], true);

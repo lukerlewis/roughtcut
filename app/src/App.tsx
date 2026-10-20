@@ -1,4 +1,4 @@
-import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Scissors, SkipBack, Type } from "lucide-react";
+import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, MessageSquarePlus, Scissors, SkipBack, Type } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
@@ -14,6 +14,9 @@ import { drawAt, graphicsLayer, type Placed } from "./lib/graphics";
 import {
   acceptAll,
   addText,
+  addNote,
+  setNote,
+  openNotes,
   addZoom,
   agentCutAt,
   applyRoughCut,
@@ -234,14 +237,14 @@ export default function App() {
     };
   }, [change]);
 
-  const ask = async (text: string) => {
-    if (!project || !edits || asking) return;
+  const ask = async (text: string, current = edits, shown = text) => {
+    if (!project || !current || asking) return;
     player.current?.pause();
     setAsking(true);
-    const before = { ...chat, messages: [...chat.messages, { role: "you" as const, text }] };
+    const before = { ...chat, messages: [...chat.messages, { role: "you" as const, text: shown }] };
     setChat(before);
     try {
-      await backend.saveEdits(project.folder, edits); // so Claude starts from what's on screen
+      await backend.saveEdits(project.folder, current); // so Claude starts from what's on screen
       await backend.askClaude(project.folder, project.source, project.info.duration, text, chat.session);
     } catch (e) {
       setChat((c) => ({ ...c, messages: [...c.messages, { role: "error", text: String(e) }] }));
@@ -289,7 +292,8 @@ export default function App() {
   const picked = effect?.kind === "zoom" ? edits?.zooms?.[effect.index] : undefined;
   const pickedClip = effect?.kind === "clip" ? edits?.clips?.[effect.index] : undefined;
   const pickedText = effect?.kind === "text" ? edits?.texts?.[effect.index] : undefined;
-  const pickedAny = picked || pickedClip || pickedText;
+  const pickedNote = effect?.kind === "note" ? edits?.notes?.[effect.index] : undefined;
+  const pickedAny = picked || pickedClip || pickedText || pickedNote;
   // While a zoom's settings are open the video shows whole, with the zoom as a box to drag.
   const zoom = picked ? null : zoomAt(words, zooms, state.source);
   const box = picked ? zoomBox(look ?? picked) : null;
@@ -394,6 +398,37 @@ export default function App() {
     setSelection(null);
     setTimeout(() => pickEffect({ kind: "text", index }), 0);
   };
+  // Notes: N drops one at the playhead; Return in it carries on playing if it was.
+  const resumeAfterNote = useRef(false);
+  const newNote = () => {
+    if (!edits) return;
+    resumeAfterNote.current = state.playing;
+    player.current?.pause();
+    const index = edits.notes?.length ?? 0;
+    change((x) => addNote(x, state.source));
+    setSelection(null);
+    setTimeout(() => pickEffect({ kind: "note", index }), 0);
+  };
+  const noteSaved = () => {
+    pickEffect(null);
+    if (resumeAfterNote.current) player.current?.play();
+    resumeAfterNote.current = false;
+  };
+  const sendNotes = (draft?: string) => {
+    if (!edits) return;
+    // The note being typed may not be saved yet.
+    const current = draft !== undefined && effect?.kind === "note" ? setNote(edits, effect.index, { text: draft }) : edits;
+    if (current !== edits) change(() => current);
+    const list = openNotes(current).map(({ note, index }) => {
+      const near = words.findIndex((w) => w.end >= note.at);
+      const said = near >= 0 ? ` (near word ${near}, "${words.slice(near, near + 6).map((w) => w.text).join(" ")}")` : "";
+      return `- Note ${index} at ${timecode(note.at)} in the recording${said}: ${note.text.trim()}`;
+    });
+    if (!list.length) return;
+    setTab("chat");
+    setEffect(null);
+    void ask(`My notes on the edit. Work through each one, then mark it done with resolve_note and a short reply.\n${list.join("\n")}`, current, list.length === 1 ? `My note: ${openNotes(current)[0].note.text.trim()}` : `My ${list.length} notes:\n${openNotes(current).map(({ note }) => `${timecode(note.at)} ${note.text.trim()}`).join("\n")}`);
+  };
   const clip = clipAt(clips, state.source);
   const clipVideo = useRef<HTMLVideoElement>(null);
   const [clipUrls, setClipUrls] = useState<Record<string, string>>({});
@@ -458,6 +493,9 @@ export default function App() {
         e.preventDefault();
         change((x) => cutWords(clearWordTrims(x, selection.first, selection.last), selection.first, selection.last));
         setSelection(null);
+      } else if (!mod && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        newNote();
       } else if (!mod && e.key.toLowerCase() === "t") {
         e.preventDefault();
         newText();
@@ -560,6 +598,9 @@ export default function App() {
         </button>
         <button className="btn ghost" onClick={newText} title="Add a title over the selected words or at the playhead (T)">
           <Type size={16} /> Text
+        </button>
+        <button className="btn ghost" onClick={newNote} title="Leave a note at the playhead, for you or for Claude (N)">
+          <MessageSquarePlus size={16} /> Note
         </button>
         <div className="seg" title="Captions">
           <button className={!captions.on ? "on" : ""} onClick={() => change((x) => setCaptions(x, { ...captions, on: false }))}>
@@ -699,6 +740,11 @@ export default function App() {
               clip={pickedClip}
               text={pickedText}
               onText={(patch) => effect && change((x) => setText(x, effect.index, patch))}
+              note={pickedNote}
+              onNote={(patch) => effect && change((x) => setNote(x, effect.index, patch))}
+              onNoteSaved={noteSaved}
+              openNotes={openNotes(edits).length + (pickedNote && !pickedNote.text.trim() ? 1 : 0)}
+              onSendNotes={sendNotes}
               look={look}
               onLook={setLook}
               onCommit={(l) => {
@@ -766,8 +812,8 @@ export default function App() {
         words={words}
         tracks={tracks}
         onFxEdit={(fx, start, end, mode) => change((x) => moveEffect(x, words, fx, start, end, mode))}
-        pins={[]}
-        onPin={() => undefined}
+        pins={(edits.notes ?? []).map((n, index) => ({ index, at: n.at, done: !!n.done, forClaude: n.by === "you" }))}
+        onPin={(index) => pickEffect({ kind: "note", index })}
         effect={effect}
         onSelectEffect={pickEffect}
         onTrim={(i, start, end) => change((x) => trimClip(x, ranges, i, start, end))}

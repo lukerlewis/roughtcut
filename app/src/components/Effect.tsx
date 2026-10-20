@@ -1,6 +1,6 @@
-import { Check, Film, Trash2, Type, X, ZoomIn } from "lucide-react";
+import { Check, Film, MessageSquare, Send, Trash2, Type, X, ZoomIn } from "lucide-react";
 import { useEffect, useState } from "react";
-import { TEXT_DEFAULTS, timecode, zoomSpan, type Clip, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
+import { TEXT_DEFAULTS, timecode, zoomSpan, type Clip, type Note, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
 
 export type Look = { scale: number; x: number; y: number };
 
@@ -10,6 +10,11 @@ interface Props {
   clip?: Clip;
   text?: TextFx;
   onText: (patch: Partial<TextFx>) => void; // saved as one change
+  note?: Note;
+  onNote: (patch: Partial<Note>) => void;
+  onNoteSaved: () => void; // Return in the note: carry on watching
+  openNotes: number; // notes not yet sent or done, this one included
+  onSendNotes: (draft: string) => void;
   look: Look | null; // a change in progress, not yet saved
   onLook: (look: Look | null) => void; // while sliding
   onCommit: (look: Look) => void; // when the slider is let go
@@ -119,8 +124,72 @@ function TextSettings({ t, onText, onKeep, onRemove }: { t: TextFx; onText: Prop
   );
 }
 
+function NoteSettings({ n, p }: { n: Note; p: Props }) {
+  const [draft, setDraft] = useState(n.text);
+  useEffect(() => setDraft(n.text), [n.text]);
+  const save = () => draft !== n.text && p.onNote({ text: draft });
+  return (
+    <div className="panel-body effect">
+      <div className="effect-head">
+        <MessageSquare size={15} /> <span>{n.by === "agent" ? "Note from Claude" : "Note"}</span>
+      </div>
+      <p className="why">
+        <span className="mono">{timecode(n.at, 30, true)}</span>
+      </p>
+      {n.by === "agent" ? (
+        <p>{n.text}</p>
+      ) : (
+        <textarea
+          className="field note"
+          autoFocus={!n.text}
+          value={draft}
+          rows={4}
+          placeholder="What should change here? Return to save and keep watching."
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              save();
+              p.onNoteSaved();
+            } else if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur();
+          }}
+        />
+      )}
+      {n.reply && (
+        <>
+          <label className="setting">
+            <span>Claude</span>
+          </label>
+          <p className="why">{n.reply}</p>
+        </>
+      )}
+      <p className="hint">Press N while watching to drop a note. Send them to Claude when you're done, and it works through each one.</p>
+      <div className="actions">
+        {p.openNotes > 0 && (
+          <button className="btn" onClick={() => p.onSendNotes(draft)}>
+            <Send size={14} /> Send {p.openNotes === 1 ? "note" : `${p.openNotes} notes`} to Claude
+          </button>
+        )}
+      </div>
+      <div className="actions">
+        {n.by === "you" && (
+          <button className="btn ghost" onClick={() => p.onNote({ done: !n.done })}>
+            <Check size={14} /> {n.done ? "Not done" : "Done"}
+          </button>
+        )}
+        <button className="btn ghost" onClick={p.onRemove}>
+          <Trash2 size={14} /> Delete note
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** The settings of the effect picked on the timeline. */
 export function Effect(p: Props) {
+  if (p.note) return <NoteSettings n={p.note} p={p} />;
   if (p.text) return <TextSettings t={p.text} onText={p.onText} onKeep={p.onKeep} onRemove={p.onRemove} />;
   if (p.zoom) {
     const z = p.zoom;

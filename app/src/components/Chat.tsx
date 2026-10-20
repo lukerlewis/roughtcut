@@ -1,4 +1,4 @@
-import { ArrowUp, BookOpen, Captions, Film, RotateCcw, Scissors, Square, Terminal, Type, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowUp, BookOpen, Captions, Film, MessageSquare, RotateCcw, Scissors, Square, Terminal, Type, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../lib/backend";
 import { timecode, type Word } from "../lib/edl";
@@ -54,6 +54,19 @@ function Action({ m, words, onSeekWord }: { m: ChatMessage; words: Word[]; onSee
     return (
       <div className="action quiet">
         <Type size={13} /> Took its text off {span ? `"${span}"` : ""}
+      </div>
+    );
+  if (m.tool === "resolve_note")
+    return (
+      <div className="action quiet">
+        <MessageSquare size={13} /> Dealt with note {String(m.input?.note ?? "")}: {String(m.input?.reply ?? "")}
+      </div>
+    );
+  if (m.tool === "add_note")
+    return (
+      <div className="action" onClick={() => Number.isInteger(Number(m.input?.at)) && onSeekWord(Number(m.input?.at))}>
+        <MessageSquare size={13} />
+        <span className="what">Left you a note: {String(m.input?.text ?? "")}</span>
       </div>
     );
   if (m.tool === "Bash" || m.tool === "Write" || m.tool === "Read") {

@@ -13,7 +13,7 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct Running(pub Mutex<Option<Child>>);
 
-pub const TOOLS: [&str; 10] = [
+pub const TOOLS: [&str; 12] = [
     "mcp__roughcut__get_edit",
     "mcp__roughcut__cut_words",
     "mcp__roughcut__restore_words",
@@ -24,6 +24,8 @@ pub const TOOLS: [&str; 10] = [
     "mcp__roughcut__remove_clip",
     "mcp__roughcut__add_text",
     "mcp__roughcut__remove_text",
+    "mcp__roughcut__resolve_note",
+    "mcp__roughcut__add_note",
 ];
 
 /// Built-in tools for making clips: FFmpeg and Python to render them, and
@@ -45,6 +47,8 @@ fn brief(recording: &str) -> String {
          Before making one, tell Luke in one sentence that this will be a new clip he can keep, move, trim or delete but not fine-tune afterwards, \
          and end your turn; make it only after he says yes. Use the get_edit times to pick start and end. \
          Never change or delete the recording or any file outside clips/. You can't add music yet: say so plainly if asked.\n\n\
+         Luke can pin notes to moments; get_edit lists them. When he sends you notes, deal with each one, then mark it done \
+         with resolve_note and a short reply. To point something out for him to decide, leave a note with add_note.\n\n\
          Don't re-cut anything he restored unless he asks. Luke isn't technical: reply in a sentence or two of plain \
          English, and give times like 00:12 so he can find things."
     )

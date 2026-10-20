@@ -142,6 +142,15 @@ pub fn texts(e: &mut Edits) -> &mut Vec<Value> {
     v.as_array_mut().unwrap()
 }
 
+/// Notes pinned to moments: Luke's for Claude, or Claude's for Luke.
+pub fn notes(e: &mut Edits) -> &mut Vec<Value> {
+    let v = e.other.entry("notes").or_insert_with(|| Value::Array(vec![]));
+    if !v.is_array() {
+        *v = Value::Array(vec![]);
+    }
+    v.as_array_mut().unwrap()
+}
+
 /// Claude puts text on screen over source seconds start..end.
 #[allow(clippy::too_many_arguments)]
 pub fn add_text(e: &mut Edits, style: &str, text: &str, sub: Option<&str>, start: f64, end: f64, place: Option<(f64, f64)>, reason: &str) {

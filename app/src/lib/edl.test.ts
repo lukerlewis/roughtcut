@@ -35,6 +35,9 @@ import {
   addText,
   setText,
   removeText,
+  addNote,
+  setNote,
+  openNotes,
   type Edits,
   type Word,
 } from "./edl";
@@ -245,5 +248,16 @@ describe("text on screen", () => {
     expect(edited.texts![0]).toMatchObject({ text: "Luke", status: "accepted" });
     expect(setText(c, 0, { start: 2, end: 2 })).toBe(c);
     expect(removeText(c, 0).texts![0].status).toBe("restored");
+  });
+});
+
+describe("notes", () => {
+  it("drops a note, edits it, and lists the open ones", () => {
+    let e: Edits = { version: 1, agent: [], user: [], log: [] };
+    e = addNote(e, 12.5);
+    expect(openNotes(e)).toEqual([]); // empty until Luke types
+    e = setNote(e, 0, { text: "Too slow here" });
+    expect(openNotes(e)).toHaveLength(1);
+    expect(openNotes(setNote(e, 0, { done: true }))).toEqual([]);
   });
 });

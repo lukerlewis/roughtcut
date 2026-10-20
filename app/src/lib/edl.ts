@@ -86,6 +86,7 @@ export interface Edits {
   captions?: Captions;
   clips?: Clip[];
   texts?: TextFx[];
+  notes?: Note[];
   /** Play every pause, start to end, as recorded. True until a rough cut tightens them. */
   keepPauses?: boolean;
 }
@@ -722,4 +723,40 @@ export function removeText(e: Edits, index: number): Edits {
   if (!t) return e;
   const texts = t.by === "agent" ? e.texts!.map((x, i) => (i === index ? { ...x, status: "restored" as const } : x)) : e.texts!.filter((_, i) => i !== index);
   return { ...e, texts, log: [...e.log, { at: now(), by: "you", op: "remove-text", note: t.text }] };
+}
+
+// --- Notes -----------------------------------------------------------------
+// Luke's notes pinned to moments, for himself or for Claude to work through.
+// Claude marks one done with a short reply; it can also leave one for Luke.
+
+export interface Note {
+  at: number; // source seconds
+  text: string;
+  by: "you" | "agent";
+  done?: boolean;
+  reply?: string; // Claude's answer when it dealt with it
+}
+
+export function addNote(e: Edits, at: number, text = ""): Edits {
+  return { ...e, notes: [...(e.notes ?? []), { at, text, by: "you" }], log: [...e.log, { at: now(), by: "you", op: "note", note: text }] };
+}
+
+export function setNote(e: Edits, index: number, patch: Partial<Omit<Note, "by">>): Edits {
+  const n = e.notes?.[index];
+  if (!n) return e;
+  const next = { ...n, ...patch };
+  if (JSON.stringify(next) === JSON.stringify(n)) return e;
+  const notes = e.notes!.map((x, i) => (i === index ? next : x));
+  return { ...e, notes, log: [...e.log, { at: now(), by: "you", op: "edit-note", note: next.text }] };
+}
+
+export function removeNote(e: Edits, index: number): Edits {
+  const n = e.notes?.[index];
+  if (!n) return e;
+  return { ...e, notes: e.notes!.filter((_, i) => i !== index), log: [...e.log, { at: now(), by: "you", op: "remove-note", note: n.text }] };
+}
+
+/** Notes still to deal with: Luke's that have words and aren't done. */
+export function openNotes(e: Edits): { note: Note; index: number }[] {
+  return (e.notes ?? []).flatMap((note, index) => (note.by === "you" && !note.done && note.text.trim() ? [{ note, index }] : []));
 }
