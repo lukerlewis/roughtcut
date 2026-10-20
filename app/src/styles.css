@@ -459,3 +459,15 @@ body.dragging-fx, body.dragging-fx * { cursor: grabbing !important; }
 .saved-state { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; padding: 2px 6px; border-radius: 6px; font: inherit; font-size: 12px; color: var(--muted-foreground); cursor: default; }
 .saved-state:hover { background: var(--muted); }
 .saved-state.failed { color: var(--notification); }
+
+/* Edges between panels that resize them. */
+.main { position: relative; }
+.splitter { position: absolute; z-index: 20; touch-action: none; }
+.splitter.col { top: 0; bottom: 0; width: 7px; margin-left: -3px; cursor: col-resize; }
+.splitter.row { left: 0; right: 0; height: 7px; bottom: -4px; cursor: row-resize; }
+.splitter::after { content: ""; position: absolute; background: transparent; transition: background 0.12s; }
+.splitter.col::after { top: 0; bottom: 0; left: 3px; width: 1px; }
+.splitter.row::after { left: 0; right: 0; top: 3px; height: 1px; }
+.splitter:hover::after, .splitter.dragging::after { background: var(--grey-700); }
+body.resizing-col, body.resizing-col * { cursor: col-resize !important; user-select: none; }
+body.resizing-row, body.resizing-row * { cursor: row-resize !important; user-select: none; }

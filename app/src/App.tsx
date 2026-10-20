@@ -14,6 +14,7 @@ import { Effect, type Look } from "./components/Effect";
 import { Timeline, type Effect as Picked } from "./components/Timeline";
 import { Transcript, type Selection } from "./components/Transcript";
 import { Updates } from "./components/Updates";
+import { Splitter } from "./components/Splitter";
 import * as backend from "./lib/backend";
 import { alignWords } from "./lib/align";
 import { captionStrips } from "./lib/captions";
@@ -96,6 +97,30 @@ interface Project {
 
 const name = (path: string) => path.split("/").pop() ?? path;
 
+/** How wide the side panels are and how tall the timeline's clip lane is, in px. */
+interface Sizes {
+  left: number;
+  right: number;
+  lane: number;
+}
+const SIZES: Sizes = { left: 380, right: 320, lane: 100 };
+
+/** Keeps panels usable: the viewer always gets at least 360px. */
+export function clampSizes(s: Sizes, width = typeof window === "undefined" ? 1440 : window.innerWidth): Sizes {
+  const right = Math.round(Math.min(640, Math.max(260, s.right)));
+  const left = Math.round(Math.min(Math.max(240, width - right - 360), Math.max(240, s.left)));
+  const lane = Math.round(Math.min(360, Math.max(48, s.lane)));
+  return { left, right, lane };
+}
+
+function loadSizes(): Sizes {
+  try {
+    return clampSizes({ ...SIZES, ...JSON.parse(localStorage.getItem("roughcut-panels") ?? "{}") });
+  } catch {
+    return clampSizes(SIZES);
+  }
+}
+
 /** "just now", "5 minutes ago", "yesterday", "12 Oct", from Unix seconds. */
 export function ago(seconds: number, now = Date.now() / 1000): string {
   const s = Math.max(0, now - seconds);
@@ -127,6 +152,24 @@ export default function App() {
   const [chat, setChat] = useState<backend.Chat>({ session: null, messages: [] });
   const [asking, setAsking] = useState(false);
   const [cutting, setCutting] = useState<{ log: string[]; error?: string } | null>(null);
+  // Panel sizes Luke dragged, remembered for next time.
+  const [sizes, setSizes] = useState<Sizes>(loadSizes);
+  const sizesAtDrag = useRef(sizes);
+  const resize = (next: Partial<Sizes>) =>
+    setSizes((s) => {
+      const out = clampSizes({ ...s, ...next });
+      try {
+        localStorage.setItem("roughcut-panels", JSON.stringify(out));
+      } catch {
+        // Sizes just won't be remembered.
+      }
+      return out;
+    });
+  useEffect(() => {
+    const fit = () => setSizes((s) => clampSizes(s));
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, []);
   const videoA = useRef<HTMLVideoElement>(null);
   const videoB = useRef<HTMLVideoElement>(null);
   const player = useRef<CutPlayer | null>(null);
@@ -1262,7 +1305,27 @@ export default function App() {
         </button>
       </div>
 
-      <div className="main">
+      <div className="main" style={{ gridTemplateColumns: `${sizes.left}px minmax(0, 1fr) ${sizes.right}px` }}>
+        <Splitter
+          dir="col"
+          style={{ left: sizes.left }}
+          onStart={() => (sizesAtDrag.current = sizes)}
+          onDrag={(d) => resize({ left: sizesAtDrag.current.left + d })}
+          onReset={() => resize({ left: SIZES.left })}
+        />
+        <Splitter
+          dir="col"
+          style={{ right: sizes.right - 4 }}
+          onStart={() => (sizesAtDrag.current = sizes)}
+          onDrag={(d) => resize({ right: sizesAtDrag.current.right - d })}
+          onReset={() => resize({ right: SIZES.right })}
+        />
+        <Splitter
+          dir="row"
+          onStart={() => (sizesAtDrag.current = sizes)}
+          onDrag={(d) => resize({ lane: sizesAtDrag.current.lane - d })}
+          onReset={() => resize({ lane: SIZES.lane })}
+        />
         <div className="panel">
           <div className="panel-head tabs">
             <button className={left === "transcript" ? "on" : ""} onClick={() => setLeft("transcript")}>
@@ -1525,6 +1588,7 @@ export default function App() {
       </div>
 
       <Timeline
+        laneHeight={sizes.lane}
         ranges={ranges}
         duration={project.info.duration}
         peaks={peaks}

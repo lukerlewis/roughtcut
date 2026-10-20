@@ -38,6 +38,7 @@ interface Props {
   peaks: Uint8Array | null; // loudness per 10ms of source
   time: number; // playhead, seconds into the cut
   playing: boolean;
+  laneHeight?: number; // px
   claudeJoins: number[]; // indexes of joins where Claude's unreviewed cut sits
   fps: number;
   words: Word[];
@@ -60,7 +61,7 @@ const RULER = 22;
 const TRACK_TOP = 28;
 const TRACK_H = 18; // each effect track
 const TRACK_GAP = 26; // from one track's top to the next
-const LANE_H = 100;
+const LANE_H = 100; // the clips lane, unless Luke drags the timeline taller or shorter
 const EDGE = 6; // px from an end that grabs it
 const MIN = 0.1; // shortest effect, in seconds
 
@@ -164,6 +165,7 @@ function glyph(g: CanvasRenderingContext2D, icon: FxItem["icon"], x: number, y: 
 }
 
 export function Timeline(p: Props) {
+  const laneH = p.laneHeight ?? LANE_H;
   const canvas = useRef<HTMLCanvasElement>(null);
   const [zoom, setZoom] = useState(0); // 0 = fit the whole cut
   const [scroll, setScroll] = useState(0); // seconds at the left edge
@@ -293,14 +295,14 @@ export function Timeline(p: Props) {
         g.globalAlpha = bl.word === null ? 0.55 : 1;
         g.fillStyle = clipFill;
         g.beginPath();
-        g.roundRect(bx0, LANE_TOP, bw, LANE_H, 3);
+        g.roundRect(bx0, LANE_TOP, bw, laneH, 3);
         g.fill();
         g.globalAlpha = 1;
       }
       if (p.peaks) {
         g.fillStyle = waveFill;
-        const mid = LANE_TOP + LANE_H * 0.64;
-        const amp = LANE_H * 0.3;
+        const mid = LANE_TOP + laneH * 0.64;
+        const amp = laneH * 0.3;
         for (let px = Math.max(0, Math.floor(x0)); px < Math.min(w, x1 - 2); px++) {
           const s0 = a + (px - x0) / pps;
           const s1 = a + (px + 1 - x0) / pps;
@@ -317,7 +319,7 @@ export function Timeline(p: Props) {
         if (bl.word !== null && bw > 14) {
           g.save();
           g.beginPath();
-          g.rect(bx0 + 4, LANE_TOP, bw - 6, LANE_H);
+          g.rect(bx0 + 4, LANE_TOP, bw - 6, laneH);
           g.clip();
           g.font = `12px ${sans}`;
           g.fillStyle = css("--subtle-foreground");
@@ -332,19 +334,19 @@ export function Timeline(p: Props) {
           g.strokeStyle = css("--ink");
           g.lineWidth = 2;
           g.beginPath();
-          g.roundRect(bx0 + 1, LANE_TOP + 1, bw - 2, LANE_H - 2, 3);
+          g.roundRect(bx0 + 1, LANE_TOP + 1, bw - 2, laneH - 2, 3);
           g.stroke();
         }
       }
       if (preview?.kind === "trim" && preview.clip === i) {
         g.fillStyle = css("--ink");
-        g.fillRect(x0, LANE_TOP, 2, LANE_H);
-        g.fillRect(x1 - 4, LANE_TOP, 2, LANE_H);
+        g.fillRect(x0, LANE_TOP, 2, laneH);
+        g.fillRect(x1 - 4, LANE_TOP, 2, laneH);
       }
       // Claude's unreviewed cut sits at the start of this piece: mark the join blue.
       if (i > 0 && p.claudeJoins.includes(i)) {
         g.fillStyle = css("--unread");
-        g.fillRect(x0 - 1.5, LANE_TOP - 4, 2, LANE_H + 8);
+        g.fillRect(x0 - 1.5, LANE_TOP - 4, 2, laneH + 8);
         g.beginPath();
         g.moveTo(x0 - 5, LANE_TOP - 6);
         g.lineTo(x0 + 3, LANE_TOP - 6);
@@ -446,7 +448,7 @@ export function Timeline(p: Props) {
       const edge: FxMode = Math.abs(clientX - x0) <= EDGE ? "left" : Math.abs(clientX - x1) <= EDGE ? "right" : "move";
       return { mode: "fx", edge, f } as const;
     }
-    if (y >= LANE_TOP && y <= LANE_TOP + LANE_H) {
+    if (y >= LANE_TOP && y <= LANE_TOP + laneH) {
       let acc = 0;
       for (let i = 0; i < ranges.length; i++) {
         const [a, b] = ranges[i];
@@ -557,7 +559,7 @@ export function Timeline(p: Props) {
       )}
       <canvas
         ref={canvas}
-        style={{ height: LANE_TOP + LANE_H + 20 }}
+        style={{ height: LANE_TOP + laneH + 20 }}
         onMouseDown={(e) => {
           const h = hit(e.clientX, e.clientY);
           setPause(null);
