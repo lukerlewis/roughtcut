@@ -3,6 +3,7 @@
 //! exports the finished video. FFmpeg and the `roughcut` CLI do the heavy work
 //! as separate programs; the UI is web code drawn by macOS's own WebKit.
 
+mod assets;
 mod claude;
 mod edits;
 mod markers;
@@ -130,6 +131,16 @@ fn save_edits(folder: String, edits: Value) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&edits).map_err(|e| e.to_string())?;
     fs::write(&tmp, text).map_err(|e| format!("Couldn't save: {e}"))?;
     fs::rename(&tmp, dir.join("edits.json")).map_err(|e| format!("Couldn't save: {e}"))
+}
+
+#[tauri::command]
+fn load_assets() -> Value {
+    assets::load()
+}
+
+#[tauri::command]
+fn save_assets(assets: Value) -> Result<(), String> {
+    assets::save(&assets)
 }
 
 #[tauri::command]
@@ -395,6 +406,8 @@ pub fn run() {
             load_cut,
             save_edits,
             list_versions,
+            load_assets,
+            save_assets,
             save_version,
             open_version,
             delete_version,

@@ -1,6 +1,7 @@
 // Talks to the Rust core. In a plain browser (vite dev, UI tests) it falls
 // back to fixtures under /fixtures so the UI can be worked on without the app.
 
+import type { Asset } from "../components/Library";
 import type { CaptionStrips } from "./captions";
 import type { Decisions, Edits, Segment, Voice, Word } from "./edl";
 
@@ -412,4 +413,17 @@ export async function deleteVersion(folder: string, id: string): Promise<void> {
     return localStorage.setItem("roughcut-versions", JSON.stringify(all));
   }
   return invoke("delete_version", { folder, id });
+}
+
+// --- Assets ----------------------------------------------------------------
+
+
+export async function loadAssets(): Promise<Asset[]> {
+  if (!inApp) return JSON.parse(localStorage.getItem("roughcut-assets") ?? "[]");
+  return invoke<Asset[]>("load_assets");
+}
+
+export async function saveAssets(assets: Asset[]): Promise<void> {
+  if (!inApp) return localStorage.setItem("roughcut-assets", JSON.stringify(assets));
+  return invoke("save_assets", { assets });
 }

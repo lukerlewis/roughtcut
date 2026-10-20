@@ -45,6 +45,8 @@ import {
   setNote,
   openNotes,
   findRetakes,
+  zoomAmount,
+  setZoomEase,
   addRetakeCuts,
   type Edits,
   type Word,
@@ -347,5 +349,30 @@ describe("verbal markers", () => {
     expect(added).toBe(2);
     expect(edits.agent.every((c) => c.status === "pending")).toBe(true);
     expect(addRetakeCuts(edits, words).added).toBe(0);
+  });
+});
+
+describe("zooms easing in and out", () => {
+  it("eases in and out over the set times", () => {
+    const z = { easeIn: 1, easeOut: 2 };
+    expect(zoomAmount(z, [10, 20], 9)).toBe(0);
+    expect(zoomAmount(z, [10, 20], 10)).toBe(0);
+    expect(zoomAmount(z, [10, 20], 10.5)).toBeCloseTo(0.5);
+    expect(zoomAmount(z, [10, 20], 15)).toBe(1);
+    expect(zoomAmount(z, [10, 20], 19)).toBeCloseTo(0.5);
+    expect(zoomAmount(z, [10, 20], 20)).toBe(0);
+  });
+  it("starts fully zoomed in with no ease in", () => {
+    expect(zoomAmount({ easeIn: 0, easeOut: 10 }, [10, 20], 10)).toBe(1);
+    expect(zoomAmount({ easeIn: 0, easeOut: 10 }, [10, 20], 15)).toBeCloseTo(0.5);
+  });
+  it("is set per zoom and carried to the export", () => {
+    let e: Edits = { version: 1, agent: [], user: [], log: [], zooms: [{ first: 7, last: 10, scale: 1.5, x: 0.5, y: 0.4, by: "you" }] };
+    e = setZoomEase(e, 0, { easeIn: 0, easeOut: 3 });
+    expect(e.zooms![0]).toMatchObject({ easeIn: 0, easeOut: 3 });
+    const segs = segments([[0, 6]], SAMPLE, e.zooms!);
+    const zoomed = segs.find((s) => s.zoom);
+    expect(zoomed?.zoom).toMatchObject({ easeIn: 0, easeOut: 3 });
+    expect(zoomed?.zoom?.from).toBeCloseTo(SAMPLE[7].start - 0.08);
   });
 });

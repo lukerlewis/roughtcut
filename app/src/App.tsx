@@ -1,4 +1,4 @@
-import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, EyeOff, Gauge, LayoutPanelLeft, MessageSquarePlus, MessageSquareX, Sparkles, MousePointerClick, Mic, Plus, User, ZoomIn, Scissors, SkipBack, Type } from "lucide-react";
+import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, MessageSquareX, Sparkles, Mic, Scissors, SkipBack } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
@@ -6,6 +6,7 @@ import { Style } from "./components/Style";
 import { Record } from "./components/Record";
 import { Menu } from "./components/Menu";
 import { Versions } from "./components/Versions";
+import { Library, type Asset, type LibraryItem } from "./components/Library";
 import { Effect, type Look } from "./components/Effect";
 import { Timeline, type Effect as Picked } from "./components/Timeline";
 import { Transcript, type Selection } from "./components/Transcript";
@@ -64,10 +65,14 @@ import {
   wordAt,
   zoomAt,
   zoomBox,
+  zoomScaleAt,
+  setZoomEase,
   zoomPointFor,
   type CaptionStyle,
   type Edits,
   type Word,
+  type TextFx,
+  type TextStyle,
 } from "./lib/edl";
 import { CutPlayer, type PlayerState } from "./lib/player";
 
@@ -97,6 +102,7 @@ export default function App() {
   const [state, setState] = useState<PlayerState>({ playing: false, time: 0, source: 0 });
   const [exporting, setExporting] = useState<{ progress: number; dest: string; done: boolean; error?: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [left, setLeft] = useState<"transcript" | "library">("transcript");
   const [tab, setTab] = useState<"changes" | "chat" | "effect" | "style" | "versions">("changes");
   const [effect, setEffect] = useState<Picked | null>(null); // the zoom or clip whose settings show
   const [look, setLook] = useState<Look | null>(null); // a zoom change being dragged, not yet saved
@@ -490,22 +496,84 @@ export default function App() {
     window.addEventListener("pointerup", up);
   };
 
-  /** Adds text over the selected words, or for three seconds from the playhead, and opens its settings. */
-  const newText = () => {
+  // Where a dragged library item was dropped, in seconds into the cut, while it's being added.
+  const placing = useRef<number | null>(null);
+
+  /** Adds text (a style, or one of Luke's assets) where it was dropped, over
+   *  the selected words, or for three seconds from the playhead, and opens its settings. */
+  const newText = (style: TextStyle = "title", asset?: Asset) => {
     if (!edits || !project) return;
     player.current?.pause();
     // Work in the cut, so a title never lands on words that don't play.
-    let a = selection ? sourceToCut(ranges, words[selection.first].start) : state.time;
-    let b = selection ? sourceToCut(ranges, words[selection.last].end) : a + 3;
-    if (b - a < 0.5) [a, b] = [state.time, state.time + 3];
+    const from = placing.current ?? state.time;
+    let a = placing.current === null && selection ? sourceToCut(ranges, words[selection.first].start) : from;
+    let b = placing.current === null && selection ? sourceToCut(ranges, words[selection.last].end) : a + 3;
+    if (b - a < 0.5) [a, b] = [from, from + 3];
     const length = sourceToCut(ranges, project.info.duration);
     if (b > length) [a, b] = [Math.max(0, length - 3), length];
     const [start, end] = [cutToSource(ranges, a).source, cutToSource(ranges, b).source];
     const index = edits.texts?.length ?? 0;
-    change((x) => addText(x, "title", "Your title", start, end));
+    const words0 = { title: "Your title", "lower-third": "Your name", callout: "Look here" }[style];
+    change((x) => {
+      const added = addText(x, asset?.style ?? style, asset?.text ?? words0, start, end);
+      return asset ? setText(added, index, { sub: asset.sub, size: asset.size, look: asset.look, x: asset.x, y: asset.y }) : added;
+    });
     setSelection(null);
     setTimeout(() => pickEffect({ kind: "text", index }), 0);
   };
+
+  /** A zoom over the words where it was dropped (or the selection, or from the playhead). */
+  const newZoom = () => {
+    const span = spanForNew();
+    if (!edits || !span) return;
+    const first = words.findIndex((w) => w.end > span[0]);
+    let last = first;
+    while (last + 1 < words.length && words[last + 1].start < span[1]) last++;
+    if (first < 0) return;
+    change((x) => addZoom(x, first, last));
+    setSelection(null);
+    setTimeout(() => setEdits((cur) => {
+      const index = cur?.zooms?.findIndex((z) => z.first === first && z.by === "you") ?? -1;
+      if (index >= 0) pickEffect({ kind: "zoom", index });
+      return cur;
+    }), 0);
+  };
+
+  // Luke's saved assets (title cards and the like), the same in every video.
+  const [assets, setAssets] = useState<Asset[]>([]);
+  useEffect(() => {
+    backend.loadAssets().then(setAssets, () => setAssets([]));
+  }, []);
+  const saveAssets = (next: Asset[]) => {
+    setAssets(next);
+    backend.saveAssets(next).catch((e) => setNotice(String(e)));
+  };
+  const saveAsset = (t: TextFx) => {
+    const name = t.text.trim() || "Untitled";
+    const asset: Asset = { id: `${Date.now()}`, name, style: t.style, text: t.text, sub: t.sub, size: t.size, look: t.look, x: t.x, y: t.y };
+    saveAssets([...assets.filter((a) => a.name !== name), asset]);
+    setNotice(`Saved \u201c${name}\u201d to your assets. Drag it from Library into any video.`);
+  };
+
+  /** A library item clicked (at the playhead) or dropped on the timeline. */
+  const addFromLibrary = (item: LibraryItem, at: { clientX: number; clientY: number } | null) => {
+    placing.current = at ? timelineTime.current(at.clientX) : null;
+    try {
+      if (item.kind === "text") newText(item.style);
+      else if (item.kind === "asset") {
+        const asset = assets.find((a) => a.id === item.id);
+        if (asset) newText(asset.style, asset);
+      } else if (item.kind === "zoom") newZoom();
+      else if (item.kind === "speed" || item.kind === "blur") newTimed(item.kind);
+      else if (item.kind === "background") newBackground();
+      else if (item.kind === "layout") newLayout();
+      else if (item.kind === "note") newNote();
+    } finally {
+      placing.current = null;
+    }
+  };
+  const timelineTime = useRef<(clientX: number) => number>(() => state.time);
+
   // Background swap: rendered on the Mac by a small helper, then played as a clip.
   const [rendering, setRendering] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -567,6 +635,7 @@ export default function App() {
   // Speed-ups and blurs: over the selected words, or a few seconds from the playhead.
   const spanForNew = (): [number, number] | null => {
     if (!project) return null;
+    if (placing.current !== null) return [cutToSource(ranges, placing.current).source, cutToSource(ranges, placing.current + 3).source];
     if (selection) return [words[selection.first].start, words[selection.last].end];
     return [state.source, cutToSource(ranges, state.time + 3).source];
   };
@@ -594,7 +663,8 @@ export default function App() {
     resumeAfterNote.current = state.playing;
     player.current?.pause();
     const index = edits.notes?.length ?? 0;
-    change((x) => addNote(x, state.source));
+    const at = placing.current !== null ? cutToSource(ranges, placing.current).source : state.source;
+    change((x) => addNote(x, at));
     setSelection(null);
     setTimeout(() => pickEffect({ kind: "note", index }), 0);
   };
@@ -840,24 +910,6 @@ export default function App() {
         <Menu
           label={
             <>
-              <Plus size={16} /> <span className="lbl">Add</span>
-            </>
-          }
-          title="Add an effect over the selected words, or at the playhead"
-          items={[
-            { label: "Text", icon: <Type size={14} />, key: "T", onClick: newText },
-            { label: "Note", icon: <MessageSquarePlus size={14} />, key: "N", onClick: newNote },
-            { label: "Zoom", icon: <ZoomIn size={14} />, key: "Z", disabled: !selection, onClick: () => selection && toggleZoom(selection.first, selection.last) },
-            { label: "Speed-up", icon: <Gauge size={14} />, key: "S", onClick: () => newTimed("speed") },
-            { label: "Blur", icon: <EyeOff size={14} />, key: "B", onClick: () => newTimed("blur") },
-            { label: "Background", icon: <User size={14} />, key: "G", onClick: newBackground },
-            { label: "Layout", icon: <LayoutPanelLeft size={14} />, key: "V", disabled: !parts?.camera?.video, onClick: newLayout },
-            { label: "Zoom to my clicks", icon: <MousePointerClick size={14} />, disabled: !parts?.clicks.length, onClick: zoomToClicks },
-          ]}
-        />
-        <Menu
-          label={
-            <>
               <CaptionsIcon size={16} /> <span className="lbl">Captions</span>
             </>
           }
@@ -892,9 +944,24 @@ export default function App() {
 
       <div className="main">
         <div className="panel">
-          <div className="panel-head">
-            Transcript <span className="meta">Select words, then ⌫ cut, Z zoom, S speed up, B blur, G background. J K L to play.</span>
+          <div className="panel-head tabs">
+            <button className={left === "transcript" ? "on" : ""} onClick={() => setLeft("transcript")}>
+              Transcript
+            </button>
+            <button className={left === "library" ? "on" : ""} onClick={() => setLeft("library")}>
+              Library
+            </button>
+            <span className="spacer" />
           </div>
+          {left === "library" ? (
+            <Library
+              assets={assets}
+              recordedHere={!!parts?.camera?.video && !!parts.screen}
+              onAdd={addFromLibrary}
+              onDeleteAsset={(id) => saveAssets(assets.filter((a) => a.id !== id))}
+              onZoomToClicks={zoomToClicks}
+            />
+          ) : (
           <Transcript
             words={words}
             kinds={kinds}
@@ -911,6 +978,7 @@ export default function App() {
             onRestore={(s) => (change((x) => restoreWords(clearWordTrims(x, s.first, s.last), s.first, s.last)), setSelection(null))}
             onZoom={(s) => toggleZoom(s.first, s.last)}
           />
+          )}
         </div>
 
         <div className="viewer">
@@ -922,7 +990,7 @@ export default function App() {
             >
               <div
                 className="zoomer"
-                style={zoom ? { transform: `scale(${zoom.scale})`, transformOrigin: `${zoom.x * 100}% ${zoom.y * 100}%` } : undefined}
+                style={zoom ? { transform: `scale(${zoomScaleAt(words, zoom, state.source)})`, transformOrigin: `${zoom.x * 100}% ${zoom.y * 100}%` } : undefined}
               >
                 <video ref={videoA} src={project.url} />
                 <video ref={videoB} src={project.url} />
@@ -1001,7 +1069,7 @@ export default function App() {
               Changes {pending > 0 && <span className="count">{pending}</span>}
             </button>
             <button className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}>
-              Ask Claude {asking && <span className="pulse" />}
+              Claude {asking && <span className="pulse" />}
             </button>
             <button className={tab === "versions" ? "on" : ""} onClick={() => setTab("versions")}>
               Versions
@@ -1041,6 +1109,7 @@ export default function App() {
               clip={pickedClip}
               text={pickedText}
               onText={(patch) => effect && change((x) => setText(x, effect.index, patch))}
+              onSaveAsset={saveAsset}
               onRender={(settings) => effect && pickedClip && void renderClip(settings, { start: pickedClip.start, end: pickedClip.end, index: effect.index })}
               onChooseImage={backend.chooseImage}
               rendering={rendering}
@@ -1057,6 +1126,14 @@ export default function App() {
               onCommit={(l) => {
                 if (effect) change((x) => setZoomLook(x, effect.index, l));
                 setLook(null);
+              }}
+              onZoomEase={(ease) => effect && change((x) => setZoomEase(x, effect.index, ease))}
+              onPreview={() => {
+                if (!effect) return;
+                const at = effectStart(edits, words, effect);
+                pickEffect(null);
+                if (at !== null) player.current?.seekSource(Math.max(0, at - 0.5));
+                setTimeout(() => player.current?.play(), 50);
               }}
               onKeep={() => effect && change((x) => setEffectStatus(x, effect, "accepted"))}
               onRemove={() => {
@@ -1134,6 +1211,7 @@ export default function App() {
         onSelectWords={(first, last) => setSelection({ first, last })}
         onCutPause={(start, end) => change((x) => cutSpan(x, start, end))}
         onScrub={(t) => player.current?.seek(t)}
+        timeAt={timelineTime}
       />
 
       {recording && <Record saving={recording === "saving"} onClose={() => setRecording(null)} />}

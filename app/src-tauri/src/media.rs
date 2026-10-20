@@ -89,11 +89,49 @@ pub fn waveform(path: &Path, cache: &Path) -> Result<Vec<u8>, String> {
     Ok(peaks)
 }
 
-#[derive(Deserialize, Clone, Copy)]
+#[derive(Deserialize, Clone, Copy, Default)]
 pub struct Zoom {
     pub scale: f64,
     pub x: f64,
     pub y: f64,
+    /// The whole zoom's span, in the same seconds as the segment, and how long
+    /// it takes to ease in and out. Without them it's a straight punch-in.
+    #[serde(default)]
+    pub from: Option<f64>,
+    #[serde(default)]
+    pub to: Option<f64>,
+    #[serde(default, rename = "easeIn")]
+    pub ease_in: f64,
+    #[serde(default, rename = "easeOut")]
+    pub ease_out: f64,
+}
+
+impl Zoom {
+    /// Filters that zoom a piece starting at `a` seconds, after its timestamps
+    /// start from 0 and before any speed-up.
+    fn filter(&self, a: f64, width: u32, height: u32, fps: f64) -> String {
+        if self.scale <= 1.001 {
+            return String::new();
+        }
+        let (x, y) = (self.x.clamp(0.0, 1.0), self.y.clamp(0.0, 1.0));
+        match (self.from, self.to) {
+            (Some(from), Some(to)) if self.ease_in > 0.001 || self.ease_out > 0.001 => {
+                // Eased: zoompan works out the zoom for each frame from its time
+                // (`it`, seconds into the piece). Doubling the size first keeps a
+                // slow zoom from wobbling on whole pixels.
+                let t = format!("({a:.4}+it)");
+                let fin = if self.ease_in > 0.001 { format!("clip(({t}-{from:.4})/{:.4},0,1)", self.ease_in) } else { "1".into() };
+                let fout = if self.ease_out > 0.001 { format!("clip(({to:.4}-{t})/{:.4},0,1)", self.ease_out) } else { "1".into() };
+                let m = format!("min({fin},{fout})");
+                format!(
+                    ",scale=iw*2:ih*2,zoompan=z='1+{:.4}*{m}*{m}*(3-2*{m})':x='(iw-iw/zoom)*{x}':y='(ih-ih/zoom)*{y}':d=1:s={width}x{height}:fps={fps:.4}",
+                    self.scale - 1.0
+                )
+            }
+            // Crop the part of the frame the zoom shows, then scale it back to full size.
+            _ => format!(",crop=w=iw/{k}:h=ih/{k}:x=(iw-iw/{k})*{x}:y=(ih-ih/{k})*{y},scale={width}:{height}", k = self.scale),
+        }
+    }
 }
 
 /// A kept piece of the recording, in source seconds, maybe zoomed in. With
@@ -207,7 +245,7 @@ impl Voice {
     }
 }
 
-pub fn concat_graph(segments: &[Segment], inputs: &[std::path::PathBuf], width: u32, height: u32, overlays: &[f64], voice: Voice) -> String {
+pub fn concat_graph(segments: &[Segment], inputs: &[std::path::PathBuf], width: u32, height: u32, fps: f64, overlays: &[f64], voice: Voice) -> String {
     let mut g = String::new();
     for (i, s) in segments.iter().enumerate() {
         let (a, b) = (s.start, s.end);
@@ -219,23 +257,13 @@ pub fn concat_graph(segments: &[Segment], inputs: &[std::path::PathBuf], width: 
             ),
             None => (0, String::new()),
         };
-        let zoom = match s.zoom {
-            // Crop the part of the frame the zoom shows, then scale it back to full size.
-            Some(z) if z.scale > 1.001 => format!(
-                ",crop=w=iw/{k}:h=ih/{k}:x=(iw-iw/{k})*{x}:y=(ih-ih/{k})*{y},scale={width}:{height}",
-                k = z.scale,
-                x = z.x.clamp(0.0, 1.0),
-                y = z.y.clamp(0.0, 1.0)
-            ),
-            _ => String::new(),
-        };
+        let zoom = s.zoom.map(|z| z.filter(a, width, height, fps)).unwrap_or_default();
         let speed = s.speed.filter(|v| *v > 0.0 && (*v - 1.0).abs() > 1e-6);
-        let pts = match speed {
-            Some(v) => format!("(PTS-STARTPTS)/{v:.4}"),
-            None => "PTS-STARTPTS".into(),
-        };
+        let pts = "PTS-STARTPTS";
+        // Sped up last, so the zoom's timing is in the recording's seconds.
+        let faster = speed.map(|v| format!(",setpts=PTS/{v:.4}")).unwrap_or_default();
         if s.blur.is_empty() {
-            g += &format!("[{k}:v]trim={a:.4}:{b:.4},setpts={pts}{fit}{zoom},setsar=1[v{i}];");
+            g += &format!("[{k}:v]trim={a:.4}:{b:.4},setpts={pts}{fit}{zoom}{faster},setsar=1[v{i}];");
         } else {
             // Blur each box: cut it out, blur it, lay it back over the frame.
             g += &format!("[{k}:v]trim={a:.4}:{b:.4},setpts={pts}{fit}[p{i}b0];");
@@ -248,7 +276,7 @@ pub fn concat_graph(segments: &[Segment], inputs: &[std::path::PathBuf], width: 
                     n = r + 1
                 );
             }
-            g += &format!("[p{i}b{}]null{zoom},setsar=1[v{i}];", s.blur.len());
+            g += &format!("[p{i}b{}]null{zoom}{faster},setsar=1[v{i}];", s.blur.len());
         }
         let tempo = speed.map(atempo).unwrap_or_default();
         g += &format!("[{k}:a]atrim={a:.4}:{b:.4},asetpts=PTS-STARTPTS{tempo},aresample=48000[a{i}];");
@@ -337,7 +365,7 @@ pub fn export(source: &Path, segments: &[Segment], overlays: &[Captions], voice:
     }
     let files = inputs(source, segments);
     let tops: Vec<f64> = layers.iter().map(|c| c.top).collect();
-    let graph = concat_graph(segments, &files, info.width, info.height, &tops, voice);
+    let graph = concat_graph(segments, &files, info.width, info.height, info.fps, &tops, voice);
     let lists: Vec<std::path::PathBuf> = caps.iter().map(|d| d.join("list.ffconcat")).collect();
     let mut encoders: Vec<Vec<&str>> = Vec::new();
     if cfg!(target_os = "macos") {
@@ -425,17 +453,17 @@ mod tests {
     fn graph_joins_every_range() {
         let segs = [
             Segment { start: 1.0, end: 2.5, zoom: None, file: None, speed: None, blur: vec![] },
-            Segment { start: 4.0, end: 6.0, zoom: Some(Zoom { scale: 1.5, x: 0.5, y: 0.4 }), file: None, speed: None, blur: vec![] },
+            Segment { start: 4.0, end: 6.0, zoom: Some(Zoom { scale: 1.5, x: 0.5, y: 0.4, ..Default::default() }), file: None, speed: None, blur: vec![] },
         ];
         let files = inputs(Path::new("/r.mov"), &segs);
-        let g = concat_graph(&segs, &files, 1920, 1080, &[], Voice::default());
+        let g = concat_graph(&segs, &files, 1920, 1080, 30.0, &[], Voice::default());
         assert!(g.contains("[0:v]trim=1.0000:2.5000,setpts=PTS-STARTPTS,setsar=1[v0]"));
         assert!(g.contains("crop=w=iw/1.5:h=ih/1.5:x=(iw-iw/1.5)*0.5:y=(ih-ih/1.5)*0.4,scale=1920:1080"));
         assert!(g.contains("[0:a]atrim=4.0000:6.0000"));
         assert!(g.ends_with("[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"));
-        let polished = concat_graph(&segs, &files, 1920, 1080, &[], Voice { level: true, clean: false });
+        let polished = concat_graph(&segs, &files, 1920, 1080, 30.0, &[], Voice { level: true, clean: false });
         assert!(polished.ends_with("[v][araw];[araw]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[a]"), "{polished}");
-        let g = concat_graph(&segs, &files, 1920, 1080, &[0.6, 0.0], Voice::default());
+        let g = concat_graph(&segs, &files, 1920, 1080, 30.0, &[0.6, 0.0], Voice::default());
         assert!(g.ends_with(
             "concat=n=2:v=1:a=1[o0][a];[1:v]format=rgba[l0];[o0][l0]overlay=x=0:y=main_h*0.6000:eof_action=pass:format=auto[o1];\
              [2:v]format=rgba[l1];[o1][l1]overlay=x=0:y=main_h*0.0000:eof_action=pass:format=auto[v]"
@@ -483,7 +511,7 @@ mod tests {
         let segs = [
             Segment { start: 0.5, end: 2.0, zoom: None, file: None, speed: None, blur: vec![Rect { x: 0.1, y: 0.1, w: 0.3, h: 0.2 }] },
             // Double speed: 2s of source plays in 1s.
-            Segment { start: 2.5, end: 4.5, zoom: Some(Zoom { scale: 1.4, x: 0.5, y: 0.4 }), file: None, speed: Some(2.0), blur: vec![] },
+            Segment { start: 2.5, end: 4.5, zoom: Some(Zoom { scale: 1.4, x: 0.5, y: 0.4, from: Some(2.5), to: Some(4.5), ease_in: 0.0, ease_out: 1.5 }), file: None, speed: Some(2.0), blur: vec![] },
             // A clip of Claude's, made at another size.
             Segment { start: 0.2, end: 1.2, zoom: None, file: Some(dir.join("clip.mp4").to_string_lossy().into()), speed: None, blur: vec![] },
         ];

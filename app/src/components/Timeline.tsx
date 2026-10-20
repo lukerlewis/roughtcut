@@ -53,6 +53,7 @@ interface Props {
   onCutPause: (start: number, end: number) => void; // source seconds
   onScrub: (t: number) => void;
   onScrubEnd?: () => void;
+  timeAt?: React.MutableRefObject<(clientX: number) => number>; // filled in: seconds into the cut at a point, for drops from the library
 }
 
 const RULER = 22;
@@ -387,6 +388,22 @@ export function Timeline(p: Props) {
     return Math.max(0, Math.min(total, t));
   };
 
+  if (p.timeAt) p.timeAt.current = timeAt;
+
+  // A library item being dragged over: a line where it will land.
+  const [dropX, setDropX] = useState<number | null>(null);
+  useEffect(() => {
+    const over = (e: Event) => {
+      const d = (e as CustomEvent<{ x: number; y: number } | null>).detail;
+      const c = canvas.current;
+      if (!d || !c) return setDropX(null);
+      const r = c.getBoundingClientRect();
+      setDropX(d.x >= r.left && d.x <= r.right && d.y >= r.top && d.y <= r.bottom ? d.x - r.left : null);
+    };
+    window.addEventListener("roughcut-dragover", over);
+    return () => window.removeEventListener("roughcut-dragover", over);
+  }, []);
+
   /** What's under the pointer: a note, an effect's edge or body, a piece's edge, or a word. */
   const hit = (clientX: number, clientY: number) => {
     const c = canvas.current!;
@@ -509,6 +526,11 @@ export function Timeline(p: Props) {
           <Plus size={16} />
         </button>
       </div>
+      {dropX !== null && canvas.current && (
+        <div className="drop-line" style={{ left: dropX, top: canvas.current.offsetTop, height: canvas.current.clientHeight, bottom: "auto" }}>
+          <span>{timecode(timeAt(canvas.current.getBoundingClientRect().left + dropX), p.fps, true)}</span>
+        </div>
+      )}
       <canvas
         ref={canvas}
         style={{ height: LANE_TOP + LANE_H + 20 }}

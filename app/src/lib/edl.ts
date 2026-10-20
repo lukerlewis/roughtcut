@@ -45,6 +45,8 @@ export interface Zoom {
   by: "you" | "agent";
   status?: AgentStatus; // Claude's zooms: unreviewed until Luke keeps or removes ("restored") them
   reason?: string;
+  easeIn?: number; // seconds to zoom in at the start (0: starts zoomed in)
+  easeOut?: number; // seconds to zoom back out at the end (0: cuts back)
 }
 
 export type CaptionStyle = "bold" | "clean";
@@ -481,6 +483,32 @@ export function timecode(t: number, fps = 30, frames = false): string {
 // --- Zooms ---------------------------------------------------------------
 
 export const ZOOM = { scale: 1.3, x: 0.5, y: 0.4 }; // a punch-in centred a little above the middle, on the face
+export const ZOOM_EASE = 0.25; // seconds in and out, unless Luke sets them
+
+/** How far in a zoom is at source time t, from 0 (not at all) to 1 (its full
+ *  scale), easing in over easeIn seconds and back out over easeOut. */
+export function zoomAmount(z: Pick<Zoom, "easeIn" | "easeOut">, span: [number, number], t: number): number {
+  const [a, b] = span;
+  if (t < a || t > b) return 0;
+  const [ei, eo] = [z.easeIn ?? ZOOM_EASE, z.easeOut ?? ZOOM_EASE];
+  const m = Math.min(ei > 0 ? (t - a) / ei : 1, eo > 0 ? (b - t) / eo : 1, 1);
+  return m * m * (3 - 2 * m);
+}
+
+/** The scale to show at source time t for this zoom. */
+export function zoomScaleAt(words: Word[], z: Zoom, t: number): number {
+  return 1 + (z.scale - 1) * zoomAmount(z, zoomSpan(words, z), t);
+}
+
+/** Sets how long a zoom takes to go in and come out. */
+export function setZoomEase(e: Edits, index: number, ease: { easeIn?: number; easeOut?: number }): Edits {
+  const z = e.zooms?.[index];
+  if (!z) return e;
+  const clamp = (v: number | undefined, old: number | undefined) => (v === undefined ? old : Math.max(0, Math.min(10, Math.round(v * 100) / 100)));
+  const next = { ...z, easeIn: clamp(ease.easeIn, z.easeIn), easeOut: clamp(ease.easeOut, z.easeOut), status: z.by === "agent" ? ("accepted" as const) : z.status };
+  const zooms = e.zooms!.map((x, i) => (i === index ? next : x));
+  return { ...e, zooms, log: [...e.log, { at: now(), by: "you", op: "zoom-ease", first: z.first, last: z.last, note: `${next.easeIn ?? ZOOM_EASE}/${next.easeOut ?? ZOOM_EASE}` }] };
+}
 
 /** Zooms that are on screen: everything except Claude's that Luke removed. */
 export function liveZooms(e: Edits): Zoom[] {
@@ -535,7 +563,8 @@ export function setZoomTimes(e: Edits, words: Word[], index: number, start: numb
 export interface Segment {
   start: number; // seconds into the recording, or into `file` when set
   end: number;
-  zoom: { scale: number; x: number; y: number } | null;
+  // from/to: the whole zoom's span in the same seconds as start/end, for easing in and out
+  zoom: { scale: number; x: number; y: number; from?: number; to?: number; easeIn?: number; easeOut?: number } | null;
   file?: string; // one of Claude's clips playing instead of the recording
   speed?: number; // played faster, pitch kept
   blur?: Rect[]; // boxes blurred out
@@ -544,7 +573,10 @@ export interface Segment {
 /** The kept ranges split wherever a zoom or clip starts or ends, for export.
  *  Pieces under a clip play from the clip's file. */
 export function segments(ranges: Range[], words: Word[], zooms: Zoom[], clips: Clip[] = [], folder = "", blurs: BlurFx[] = []): Segment[] {
-  const spans = zooms.map((z) => ({ span: zoomSpan(words, z), zoom: { scale: z.scale, x: z.x, y: z.y } }));
+  const spans = zooms.map((z) => {
+    const span = zoomSpan(words, z);
+    return { span, zoom: { scale: z.scale, x: z.x, y: z.y, from: span[0], to: span[1], easeIn: z.easeIn ?? ZOOM_EASE, easeOut: z.easeOut ?? ZOOM_EASE } };
+  });
   const pieces: (Segment & { clip: number })[] = [];
   const live = blurs.filter((x) => x.status !== "restored");
   for (const [a, b, rate] of ranges) {
@@ -573,7 +605,9 @@ export function segments(ranges: Range[], words: Word[], zooms: Zoom[], clips: C
     if (clip < 0) return p;
     const c = clips[clip];
     const at = (t: number) => Math.min(c.length, c.offset + (t - c.start));
-    return { ...p, start: at(p.start), end: at(p.end), file: `${folder}/${c.file}` };
+    const shift = c.offset - c.start;
+    const zoom = p.zoom && { ...p.zoom, from: (p.zoom.from ?? 0) + shift, to: (p.zoom.to ?? 0) + shift };
+    return { ...p, zoom, start: at(p.start), end: at(p.end), file: `${folder}/${c.file}` };
   });
 }
 

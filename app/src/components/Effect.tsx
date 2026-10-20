@@ -1,6 +1,6 @@
-import { Check, EyeOff, Film, Gauge, ImageIcon, LayoutPanelLeft, MessageSquare, Send, Trash2, Type, User, X, ZoomIn } from "lucide-react";
+import { Bookmark, Check, EyeOff, Film, Gauge, ImageIcon, LayoutPanelLeft, MessageSquare, Play, Send, Trash2, Type, User, X, ZoomIn } from "lucide-react";
 import { useEffect, useState } from "react";
-import { TEXT_DEFAULTS, timecode, zoomSpan, type Background, type BlurFx, type Clip, type LayoutMode, type Rendered, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
+import { TEXT_DEFAULTS, ZOOM_EASE, timecode, zoomSpan, type Background, type BlurFx, type Clip, type LayoutMode, type Rendered, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
 
 export type Look = { scale: number; x: number; y: number };
 
@@ -10,6 +10,7 @@ interface Props {
   clip?: Clip;
   text?: TextFx;
   onText: (patch: Partial<TextFx>) => void; // saved as one change
+  onSaveAsset: (t: TextFx) => void; // keep this text's look to reuse in any video
   onRender: (settings: Rendered) => void; // re-render with these settings
   onChooseImage: () => Promise<string | null>;
   rendering: number | null; // progress of a background being rendered
@@ -26,6 +27,8 @@ interface Props {
   onCommit: (look: Look) => void; // when the slider is let go
   onKeep: () => void;
   onRemove: () => void;
+  onZoomEase: (ease: { easeIn?: number; easeOut?: number }) => void;
+  onPreview: () => void; // play the effect from just before it
 }
 
 const STYLES: [TextStyle, string][] = [
@@ -54,7 +57,7 @@ function Field({ value, placeholder, onSave }: { value: string; placeholder: str
   );
 }
 
-function TextSettings({ t, onText, onKeep, onRemove }: { t: TextFx; onText: Props["onText"]; onKeep: () => void; onRemove: () => void }) {
+function TextSettings({ t, onText, onKeep, onRemove, onSaveAsset }: { t: TextFx; onText: Props["onText"]; onKeep: () => void; onRemove: () => void; onSaveAsset: (t: TextFx) => void }) {
   const [size, setSize] = useState<number | null>(null);
   const commitSize = () => {
     if (size !== null) onText({ size });
@@ -122,6 +125,9 @@ function TextSettings({ t, onText, onKeep, onRemove }: { t: TextFx; onText: Prop
             <Check size={14} /> Keep
           </button>
         )}
+        <button className="btn" onClick={() => onSaveAsset(t)} title="Keep this look in your Library to reuse in any video">
+          <Bookmark size={14} /> Save as asset
+        </button>
         <button className="btn ghost" onClick={onRemove}>
           {t.status === "pending" ? <X size={14} /> : <Trash2 size={14} />} Remove text
         </button>
@@ -397,13 +403,67 @@ function LayoutSettings({ c, p }: { c: Clip; p: Props }) {
 }
 
 /** The settings of the effect picked on the timeline. */
+/** How long a zoom takes to go in and to come back out, with a few starting points. */
+function ZoomEase({ z, length, p }: { z: Zoom; length: number; p: Props }) {
+  const [draft, setDraft] = useState<{ easeIn?: number; easeOut?: number } | null>(null);
+  const ei = draft?.easeIn ?? z.easeIn ?? ZOOM_EASE;
+  const eo = draft?.easeOut ?? z.easeOut ?? ZOOM_EASE;
+  const max = Math.max(0.5, Math.round(length * 10) / 10);
+  const commit = () => {
+    if (draft) p.onZoomEase(draft);
+    setDraft(null);
+  };
+  const slider = (key: "easeIn" | "easeOut", label: string, value: number) => (
+    <>
+      <label className="setting">
+        <span>{label}</span>
+        <span className="mono">{value === 0 ? "instant" : `${value.toFixed(1)}s`}</span>
+      </label>
+      <input
+        type="range"
+        min={0}
+        max={max * 10}
+        value={Math.round(Math.min(value, max) * 10)}
+        onChange={(e) => setDraft({ ...draft, [key]: Number(e.target.value) / 10 })}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+      />
+    </>
+  );
+  const full = Math.round(length * 10) / 10;
+  return (
+    <>
+      {slider("easeIn", "Zoom in over", ei)}
+      {slider("easeOut", "Zoom out over", eo)}
+      <div className="actions wrap">
+        <button className="btn" onClick={() => p.onZoomEase({ easeIn: 0, easeOut: 0 })} title="Cut straight in and straight out">
+          Punch
+        </button>
+        <button className="btn" onClick={() => p.onZoomEase({ easeIn: 0.4, easeOut: 0.4 })}>
+          Smooth
+        </button>
+        <button className="btn" onClick={() => p.onZoomEase({ easeIn: 0, easeOut: full })} title="Start zoomed in, then slowly pull out">
+          Start close
+        </button>
+        <button className="btn" onClick={() => p.onZoomEase({ easeIn: full, easeOut: 0 })} title="Slowly push in, then cut back">
+          Slow push
+        </button>
+      </div>
+      <button className="btn ghost" onClick={p.onPreview}>
+        <Play size={14} /> Play it
+      </button>
+    </>
+  );
+}
+
 export function Effect(p: Props) {
   if (p.clip?.layout) return <LayoutSettings c={p.clip} p={p} />;
   if (p.clip?.background) return <BackgroundSettings c={p.clip} p={p} />;
   if (p.speed) return <SpeedSettings x={p.speed} p={p} />;
   if (p.blur) return <BlurSettings x={p.blur} p={p} />;
   if (p.note) return <NoteSettings n={p.note} p={p} />;
-  if (p.text) return <TextSettings t={p.text} onText={p.onText} onKeep={p.onKeep} onRemove={p.onRemove} />;
+  if (p.text) return <TextSettings t={p.text} onText={p.onText} onKeep={p.onKeep} onRemove={p.onRemove} onSaveAsset={p.onSaveAsset} />;
   if (p.zoom) {
     const z = p.zoom;
     const look = p.look ?? { scale: z.scale, x: z.x, y: z.y };
@@ -438,6 +498,7 @@ export function Effect(p: Props) {
           onKeyUp={commit}
           onBlur={commit}
         />
+        <ZoomEase z={z} length={b - a} p={p} />
         <label className="setting">
           <span>Where it zooms</span>
         </label>

@@ -46,6 +46,11 @@ pub struct Zoom {
     pub start: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end: Option<f64>,
+    /// Seconds to zoom in at the start and back out at the end (0 is instant).
+    #[serde(default, rename = "easeIn", skip_serializing_if = "Option::is_none")]
+    pub ease_in: Option<f64>,
+    #[serde(default, rename = "easeOut", skip_serializing_if = "Option::is_none")]
+    pub ease_out: Option<f64>,
 }
 
 /// A clip Claude made with FFmpeg or Python. It plays instead of the
@@ -289,6 +294,8 @@ pub fn zoom(e: &mut Edits, first: usize, last: usize, scale: f64, reason: &str) 
         reason: Some(reason.into()),
         start: None,
         end: None,
+        ease_in: None,
+        ease_out: None,
     });
     e.zooms.sort_by_key(|z| z.first);
     log(e, "zoom", first, last, Some(reason));
@@ -435,7 +442,7 @@ mod tests {
         assert_eq!(back.other["future"], 1);
         // Luke's own zoom is protected.
         let mut e = empty();
-        e.zooms.push(Zoom { first: 1, last: 2, scale: 1.3, x: 0.5, y: 0.4, by: "you".into(), status: None, reason: None, start: Some(0.5), end: Some(1.25) });
+        e.zooms.push(Zoom { first: 1, last: 2, scale: 1.3, x: 0.5, y: 0.4, by: "you".into(), status: None, reason: None, start: Some(0.5), end: Some(1.25), ease_in: None, ease_out: Some(2.0) });
         assert!(zoom(&mut e, 2, 3, 1.3, "x").is_err());
         assert!(serde_json::to_string(&e).unwrap().contains(r#""start":0.5,"end":1.25"#));
     }

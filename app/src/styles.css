@@ -121,7 +121,7 @@ button { font: inherit; color: inherit; }
   display: grid; place-items: center; container-type: size;
 }
 .frame { position: relative; overflow: hidden; container-type: size; }
-.zoomer { position: absolute; inset: 0; transition: transform 240ms var(--ease); }
+.zoomer { position: absolute; inset: 0; } /* the zoom eases frame by frame, as in the export */
 .screen video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .screen video.clip { background: #000; }
 .caption { position: absolute; left: 6%; right: 6%; text-align: center; pointer-events: none; line-height: 1.2; }
@@ -141,24 +141,28 @@ button { font: inherit; color: inherit; }
 .transport .tc.now { color: var(--foreground); }
 
 /* Transcript. */
-.transcript { font-size: 14px; line-height: 1.75; color: var(--subtle-foreground); user-select: none; }
+.transcript { font-size: 14px; line-height: 1.75; color: var(--subtle-foreground); user-select: none; -webkit-user-select: none; cursor: text; touch-action: none; padding-bottom: 48px; }
 .transcript p { margin: 0 0 14px; }
 .transcript .stamp { display: block; font: 11px var(--mono); color: var(--muted-foreground); margin-bottom: 2px; }
-.w { border-radius: 4px; padding: 1px 0; cursor: text; transition: color 160ms var(--ease), background 160ms var(--ease); }
+.w { border-radius: 4px; padding: 1px 0; transition: color 160ms var(--ease); }
 .w:hover { background: var(--muted); }
 .w.cut { text-decoration: line-through; color: var(--disabled); }
 .w.cut.agent-pending { color: var(--unread); text-decoration-color: var(--unread); }
 .w.hes { font-style: italic; }
 .w.zoom { text-decoration: underline dotted var(--muted-foreground); text-underline-offset: 4px; }
 .w.zoom-pending { text-decoration: underline dotted var(--unread); text-underline-offset: 4px; }
-.w.sel { background: var(--selected); color: var(--foreground); }
+.w.sel, .gap.sel { background: var(--selected); color: var(--foreground); }
+.w.sel { border-radius: 0; }
+.w.sel-first { border-top-left-radius: 4px; border-bottom-left-radius: 4px; }
+.w.sel-last { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }
+.gap.sel { padding: 1px 0; }
 .w.sel.cut.agent-pending { background: color-mix(in srgb, var(--unread) 22%, transparent); }
 .w.now { box-shadow: inset 0 -2px 0 var(--foreground); color: var(--ink); }
 /* The selection bar floats over the words so the text never moves under the pointer. */
 .transcript-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .selbar {
-  position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; gap: 8px; align-items: center; padding: 8px 12px;
-  background: var(--sidebar); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted-foreground);
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 2; display: flex; gap: 8px; align-items: center; padding: 8px 12px;
+  background: var(--sidebar); border-top: 1px solid var(--border); font-size: 12px; color: var(--muted-foreground);
 }
 
 /* Inspector: Claude's changes. */
@@ -180,9 +184,9 @@ button { font: inherit; color: inherit; }
 .change .row .mono { font-size: 11px; color: var(--muted-foreground); margin-right: auto; }
 
 /* Right panel tabs: Claude's changes, and the conversation. */
-.panel-head.tabs { gap: 2px; padding-left: 6px; }
+.panel-head.tabs { gap: 0; padding-left: 6px; overflow: hidden; }
 .tabs > button:not(.btn) {
-  height: 26px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted-foreground);
+  height: 26px; padding: 0 7px; border: 0; border-radius: 8px; background: transparent; color: var(--muted-foreground);
   font-weight: 500; display: inline-flex; align-items: center; gap: 6px; cursor: default;
 }
 .tabs > button:not(.btn):hover { color: var(--foreground); }
@@ -223,7 +227,7 @@ button.action:hover { background: var(--muted); }
 .composer textarea::placeholder { color: var(--disabled); }
 
 /* Timeline. */
-.timeline { border-top: 1px solid var(--border); background: var(--sidebar); display: flex; flex-direction: column; }
+.timeline { position: relative; border-top: 1px solid var(--border); background: var(--sidebar); display: flex; flex-direction: column; }
 .timeline-head { height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--border); }
 .timeline-head .meta { font-size: 12px; color: var(--muted-foreground); }
 .timeline canvas { display: block; width: 100%; height: 172px; cursor: default; }
@@ -278,6 +282,7 @@ button.action:hover { background: var(--muted); }
 .effect .hint { color: var(--muted-foreground); font-size: 12px; margin: 0; }
 .effect input[type="range"] { width: 100%; accent-color: var(--ink); }
 .effect .actions { display: flex; gap: 8px; justify-content: flex-start; margin-top: 4px; }
+.effect .actions.wrap { flex-wrap: wrap; gap: 6px; }
 
 /* The zoom's framing box on the video, dragged to choose where it zooms */
 .zoombox { position: absolute; border: 1.5px solid #fff; border-radius: 2px; cursor: grab; touch-action: none; }
@@ -359,3 +364,30 @@ button.action:hover { background: var(--muted); }
 .versions .tag { font-size: 11px; color: var(--subtle-foreground); padding: 0 6px; }
 .versions .learn { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--stroke); }
 .versions .learn > .btn { align-self: flex-start; }
+/* The library: effects and saved assets to drag onto the timeline */
+.library { display: flex; flex-direction: column; gap: 14px; }
+.library .section-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.library .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
+.library .tile {
+  position: relative; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--stroke); border-radius: 10px;
+  background: var(--card); font-size: 12px; color: var(--foreground); cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none;
+}
+.library .tile:hover { border-color: var(--stroke-strong); }
+.library .tile:active { cursor: grabbing; }
+.library .tile.disabled { color: var(--disabled); cursor: default; }
+.library .tile .icon { display: grid; color: var(--muted-foreground); }
+.library .tile .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library .tile .key { font-size: 10px; color: var(--muted-foreground); }
+.library .tile .remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; opacity: 0; }
+.library .tile:hover .remove { opacity: 1; }
+.drag-ghost {
+  position: fixed; left: 0; top: 0; z-index: 100; pointer-events: none; padding: 4px 10px; border-radius: 8px; font-size: 12px;
+  background: var(--foreground); color: var(--background); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+body.dragging-fx, body.dragging-fx * { cursor: grabbing !important; }
+.timeline .drop-line { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--foreground); pointer-events: none; }
+.timeline .drop-line span {
+  position: absolute; top: 2px; left: 4px; white-space: nowrap; font: 11px var(--mono); background: var(--foreground); color: var(--background);
+  padding: 0 4px; border-radius: 4px;
+}
+.tabs > button:not(.btn) { white-space: nowrap; }

@@ -13,7 +13,7 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct Running(pub Mutex<Option<Child>>);
 
-pub const TOOLS: [&str; 23] = [
+pub const TOOLS: [&str; 24] = [
     "mcp__roughcut__get_edit",
     "mcp__roughcut__cut_words",
     "mcp__roughcut__restore_words",
@@ -36,6 +36,7 @@ pub const TOOLS: [&str; 23] = [
     "mcp__roughcut__zoom_to_clicks",
     "mcp__roughcut__cut_retakes",
     "mcp__roughcut__save_version",
+    "mcp__roughcut__add_asset",
     "mcp__roughcut__open_version",
 ];
 
@@ -48,7 +49,7 @@ fn brief(recording: &str) -> String {
     format!(
         "You are Claude inside Roughcut, Luke's video editor, talking with him in the app's sidebar while he watches \
          his video \"{name}\". You can read and change the edit with the roughcut tools: call get_edit first, \
-         then cut or restore words, zoom in on words, put titles, lower thirds or callouts on screen, speed up or blur stretches, swap the background behind him, change the screen layout or zoom to his clicks (for videos recorded in Roughcut), cut the takes he marked by saying \"cut that\" (cut_retakes), polish the voice, or turn captions on, all by word index. Your cuts and zooms show to Luke in blue as unreviewed until he keeps or restores \
+         then cut or restore words, zoom in on words, put titles, lower thirds or callouts on screen (or his saved assets, with add_asset), speed up or blur stretches, swap the background behind him, change the screen layout or zoom to his clicks (for videos recorded in Roughcut), cut the takes he marked by saying \"cut that\" (cut_retakes), polish the voice, or turn captions on, all by word index. Your cuts and zooms show to Luke in blue as unreviewed until he keeps or restores \
          them, so make the change he asks for rather than describing it, and give each one a reason of a few words. \
          Those edits stay fully adjustable by Luke, so always prefer them.\n\n\
          For anything they can't do (a look or colour change, a background, an effect), you can make a new clip: \

@@ -80,6 +80,8 @@ fn tools() -> Value {
                     "scale": { "type": "number", "description": "How far in: 1.15 subtle, 1.3 normal (default), 1.6 strong. 1.05 to 2.5." },
                     "x": { "type": "number", "description": "Where to zoom, across: 0 left edge, 0.5 middle (default), 1 right edge." },
                     "y": { "type": "number", "description": "Where to zoom, down: 0 top, 0.4 face height (default), 1 bottom." },
+                    "ease_in": { "type": "number", "description": "Seconds to zoom in at the start. 0 starts already zoomed in; default 0.25." },
+                    "ease_out": { "type": "number", "description": "Seconds to zoom back out at the end. A few seconds makes a slow pull-out; 0 cuts straight back; default 0.25." },
                     "reason": { "type": "string", "description": "A few words on why, shown to Luke." },
                 })),
                 "required": ["from", "to", "reason"],
@@ -225,6 +227,15 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": {} },
         },
         {
+            "name": "add_asset",
+            "description": "Put one of Luke's saved assets (a title card, lower third or callout he made; get_edit lists them) on screen over words from..to, in its saved look. `text` replaces its words if given.",
+            "inputSchema": {
+                "type": "object",
+                "properties": range(json!({ "name": { "type": "string" }, "text": { "type": "string" }, "reason": { "type": "string" } })),
+                "required": ["from", "to", "name", "reason"],
+            },
+        },
+        {
             "name": "save_version",
             "description": "Save the current edit as a named version Luke can switch to from his Versions list (\"Claude cut\", \"Tighter\", \"Hook 2: the question\"). Saving under an existing name replaces it.",
             "inputSchema": { "type": "object", "properties": { "name": { "type": "string" }, "note": { "type": "string", "description": "One line on what's different, shown to Luke." } }, "required": ["name"] },
@@ -273,7 +284,9 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
         "get_edit" => {
             let saved: Vec<String> = crate::versions::list(folder).iter().map(|v| format!("\"{}\" ({:.1}s)", v["name"].as_str().unwrap_or(""), v["length"].as_f64().unwrap_or(0.0))).collect();
             let versions = if saved.is_empty() { String::new() } else { format!("Saved versions: {}.\n", saved.join(", ")) };
-            Ok(describe(&words, &e, duration) + &versions)
+            let assets = crate::assets::describe();
+            let assets = if assets.is_empty() { String::new() } else { format!("Luke's assets (place with add_asset): {assets}.\n") };
+            Ok(describe(&words, &e, duration) + &versions + &assets)
         }
         "save_version" => {
             let name = args["name"].as_str().filter(|t| !t.trim().is_empty()).ok_or("Give the version a `name`.")?;
@@ -319,6 +332,8 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
                 if let Some(z) = e.zooms.iter_mut().find(|z| z.first == a && z.by == "agent") {
                     z.x = args["x"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0);
                     z.y = args["y"].as_f64().unwrap_or(0.4).clamp(0.0, 1.0);
+                    z.ease_in = args["ease_in"].as_f64().map(|v| v.clamp(0.0, 10.0));
+                    z.ease_out = args["ease_out"].as_f64().map(|v| v.clamp(0.0, 10.0));
                 }
                 format!("Zoomed in on {a}-{b}: \"{}\" at {:.0}%.", text(a, b), scale.clamp(1.05, 2.5) * 100.0)
             } else {
@@ -385,6 +400,29 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             edits::add_text(&mut e, style, text.trim(), args["sub"].as_str(), start, end, place, reason.trim());
             edits::save(folder, &e)?;
             Ok(format!("Added a {style} \"{}\" over {a}-{b} ({start:.2}-{end:.2}s). Luke will see it in blue until he reviews it.", text.trim()))
+        }
+        "add_asset" => {
+            let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
+            if a > b {
+                return Err("`from` must not be after `to`".into());
+            }
+            let name = args["name"].as_str().ok_or("Give the asset's `name`.")?;
+            let asset = crate::assets::find(name).ok_or_else(|| format!("Luke has no asset called {name}. get_edit lists them."))?;
+            let reason = args["reason"].as_str().filter(|r| !r.trim().is_empty()).ok_or("Give a short `reason`.")?;
+            let style = asset["style"].as_str().unwrap_or("title");
+            let text = args["text"].as_str().filter(|t| !t.trim().is_empty()).or(asset["text"].as_str()).unwrap_or("");
+            let place = asset["x"].as_f64().zip(asset["y"].as_f64());
+            let (start, end) = ((words[a].start - 0.1).max(0.0), (words[b].end + 0.4).min(duration));
+            edits::add_text(&mut e, style, text.trim(), asset["sub"].as_str(), start, end, place, reason.trim());
+            if let Some(t) = edits::texts(&mut e).last_mut() {
+                for key in ["size", "look"] {
+                    if !asset[key].is_null() {
+                        t[key] = asset[key].clone();
+                    }
+                }
+            }
+            edits::save(folder, &e)?;
+            Ok(format!("Placed \"{}\" over {a}-{b}. Luke will see it in blue until he reviews it.", name.trim()))
         }
         "speed_up" | "blur" => {
             let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
@@ -488,6 +526,8 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
                     reason: Some("follows your clicks".into()),
                     start: Some(start),
                     end: Some(end),
+                    ease_in: None,
+                    ease_out: None,
                 });
                 added += 1;
             }
@@ -717,7 +757,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 23);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 24);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");
