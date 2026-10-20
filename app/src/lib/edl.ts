@@ -32,10 +32,13 @@ export interface Op {
   note?: string;
 }
 
-/** A punch-in on the words first..last: scale about the point (x, y), 0..1 of the frame. */
+/** A punch-in on the words first..last: scale about the point (x, y), 0..1 of the frame.
+ *  Once Luke drags it on the timeline it also has exact source times. */
 export interface Zoom {
   first: number;
   last: number;
+  start?: number;
+  end?: number;
   scale: number;
   x: number;
   y: number;
@@ -51,11 +54,20 @@ export interface Captions {
   style: CaptionStyle;
 }
 
+/** Source seconds Luke trimmed on the timeline: cut out, or kept (a pause or
+ *  cut brought back). Applied after the word cuts, in order. */
+export interface Trim {
+  start: number;
+  end: number;
+  keep: boolean;
+}
+
 export interface Edits {
   version: 1;
   agent: AgentCut[];
   user: Span[]; // words Luke cut himself, sorted, never overlapping
   log: Op[];
+  trims?: Trim[];
   zooms?: Zoom[];
   captions?: Captions;
 }
@@ -122,6 +134,87 @@ export function keptRanges(words: Word[], keep: Set<number>, duration: number, p
     prev = i;
   });
   return ranges.filter(([a, b]) => b - a >= p.minClip);
+}
+
+/** The ranges with Luke's timeline trims applied. */
+export function applyTrims(ranges: [number, number][], trims: Trim[], duration: number): [number, number][] {
+  let out = ranges.map(([a, b]) => [a, b] as [number, number]);
+  for (const t of trims) {
+    const [s, e] = [Math.max(0, t.start), Math.min(duration, t.end)];
+    if (e <= s) continue;
+    if (t.keep) {
+      out.push([s, e]);
+      out.sort((x, y) => x[0] - y[0]);
+      const merged: [number, number][] = [];
+      for (const r of out) {
+        const last = merged[merged.length - 1];
+        if (last && r[0] <= last[1] + 1e-6) last[1] = Math.max(last[1], r[1]);
+        else merged.push([r[0], r[1]]);
+      }
+      out = merged;
+    } else
+      out = out.flatMap(([a, b]): [number, number][] =>
+        e <= a || s >= b ? [[a, b]] : ([[a, s], [e, b]] as [number, number][]).filter(([x, y]) => y - x > 0.001),
+      );
+  }
+  return out.filter(([a, b]) => b - a >= 0.04);
+}
+
+/** What plays: the kept words' ranges with Luke's trims applied. */
+export function editRanges(words: Word[], e: Edits, duration: number): [number, number][] {
+  return applyTrims(keptRanges(words, keptSet(words.length, e), duration), e.trims ?? [], duration);
+}
+
+/** Who cut each word, as the transcript shows it: a word a trim took out reads
+ *  as Luke's cut, and one a trim brought back reads as kept. */
+export function shownKinds(words: Word[], e: Edits, ranges: [number, number][]): CutKind[] {
+  const kinds = cutKinds(words.length, e);
+  if (!e.trims?.length) return kinds;
+  let r = 0;
+  return kinds.map((k, i) => {
+    const mid = (words[i].start + words[i].end) / 2;
+    while (r < ranges.length && ranges[r][1] < mid) r++;
+    const plays = r < ranges.length && ranges[r][0] <= mid;
+    return plays ? null : (k ?? "user");
+  });
+}
+
+/** Luke drags a clip's edges on the timeline: clip `index` of `ranges` now
+ *  runs from start to end (source seconds). */
+export function trimClip(e: Edits, ranges: [number, number][], index: number, start: number, end: number): Edits {
+  const [a, b] = ranges[index];
+  const trims: Trim[] = [];
+  if (start > a + 1e-4) trims.push({ start: a, end: start, keep: false });
+  if (start < a - 1e-4) trims.push({ start, end: a, keep: true });
+  if (end < b - 1e-4) trims.push({ start: end, end: b, keep: false });
+  if (end > b + 1e-4) trims.push({ start: b, end, keep: true });
+  if (!trims.length) return e;
+  return { ...e, trims: [...(e.trims ?? []), ...trims], log: [...e.log, { at: now(), by: "you", op: "trim", note: `${start.toFixed(2)}-${end.toFixed(2)}` }] };
+}
+
+/** Luke selects a clip on the timeline and deletes it. */
+export function deleteClip(e: Edits, ranges: [number, number][], index: number): Edits {
+  const [a, b] = ranges[index];
+  return {
+    ...e,
+    trims: [...(e.trims ?? []), { start: a, end: b, keep: false }],
+    log: [...e.log, { at: now(), by: "you", op: "delete-clip", note: `${a.toFixed(2)}-${b.toFixed(2)}` }],
+  };
+}
+
+/** Drops timeline trims over start..end, so cutting or restoring those words
+ *  in the transcript does what it says. */
+export function clearTrims(e: Edits, start: number, end: number): Edits {
+  if (!e.trims?.length) return e;
+  const trims = e.trims.flatMap((t): Trim[] =>
+    t.end <= start || t.start >= end
+      ? [t]
+      : [
+          ...(t.start < start ? [{ ...t, end: start }] : []),
+          ...(t.end > end ? [{ ...t, start: end }] : []),
+        ],
+  );
+  return { ...e, trims };
 }
 
 export function cutDuration(ranges: [number, number][]): number {
@@ -276,19 +369,25 @@ export function setZoomStatus(e: Edits, index: number, status: AgentStatus): Edi
   return { ...e, zooms, log: [...e.log, { at: now(), by: "you", op, first: z.first, last: z.last }] };
 }
 
-/** Luke drags a zoom's edges or moves it on the timeline. A zoom of Claude's
- *  he adjusts counts as reviewed. */
-export function moveZoom(e: Edits, index: number, first: number, last: number): Edits {
-  const z = e.zooms?.[index];
-  if (!z || (z.first === first && z.last === last) || first > last) return e;
-  const status = z.by === "agent" ? ("accepted" as const) : z.status;
-  const zooms = e.zooms!.map((x, i) => (i === index ? { ...x, first, last, status } : x));
-  return { ...e, zooms, log: [...e.log, { at: now(), by: "you", op: "move-zoom", first, last }] };
+/** The source time a zoom covers: where Luke put it, or its words padded like a kept range. */
+export function zoomSpan(words: Word[], z: Zoom, p: Params = PARAMS): [number, number] {
+  if (z.start !== undefined && z.end !== undefined) return [z.start, z.end];
+  return [words[z.first].start - p.padIn, words[z.last].end + p.padOut];
 }
 
-/** The source time a zoom covers: its words, padded like a kept range. */
-export function zoomSpan(words: Word[], z: Zoom, p: Params = PARAMS): [number, number] {
-  return [words[z.first].start - p.padIn, words[z.last].end + p.padOut];
+/** Luke drags a zoom on the timeline to exact source times. Its words become
+ *  the ones it now covers. A zoom of Claude's he adjusts counts as reviewed. */
+export function setZoomTimes(e: Edits, words: Word[], index: number, start: number, end: number): Edits {
+  const z = e.zooms?.[index];
+  if (!z || end - start < 0.05) return e;
+  const [a, b] = zoomSpan(words, z);
+  if (Math.abs(a - start) < 1e-4 && Math.abs(b - end) < 1e-4) return e;
+  const inside = words.flatMap((w, i) => (w.end > start && w.start < end ? [i] : []));
+  const first = inside[0] ?? Math.max(0, wordAt(words, start));
+  const last = inside[inside.length - 1] ?? first;
+  const status = z.by === "agent" ? ("accepted" as const) : z.status;
+  const zooms = e.zooms!.map((x, i) => (i === index ? { ...x, first, last, start, end, status } : x));
+  return { ...e, zooms, log: [...e.log, { at: now(), by: "you", op: "move-zoom", first, last }] };
 }
 
 export interface Segment {

@@ -12,25 +12,28 @@ import {
   addZoom,
   agentCutAt,
   captionCues,
+  clearTrims,
   cueAt,
+  cutDuration,
+  cutWords,
+  deleteClip,
+  editRanges,
+  fromDecisions,
   liveZooms,
-  moveZoom,
+  PARAMS,
+  pendingCount,
   removeZooms,
+  restoreWords,
   segments,
+  setAgentStatus,
   setCaptions,
   setZoomStatus,
-  zoomAt,
-  cutDuration,
-  cutKinds,
-  cutWords,
-  fromDecisions,
-  keptRanges,
-  keptSet,
-  pendingCount,
-  restoreWords,
-  setAgentStatus,
+  setZoomTimes,
+  shownKinds,
   timecode,
+  trimClip,
   wordAt,
+  zoomAt,
   type CaptionStyle,
   type Edits,
   type Word,
@@ -117,11 +120,11 @@ export default function App() {
   // --- The edit ------------------------------------------------------------
 
   const words = project?.words ?? [];
-  const kinds = useMemo(() => (edits ? cutKinds(words.length, edits) : []), [edits, words.length]);
   const ranges = useMemo(
-    () => (edits && project ? keptRanges(words, keptSet(words.length, edits), project.info.duration) : []),
+    () => (edits && project ? editRanges(words, edits, project.info.duration) : []),
     [edits, project, words],
   );
+  const kinds = useMemo(() => (edits ? shownKinds(words, edits, ranges) : []), [edits, words, ranges]);
 
   const change = useCallback((next: Edits | ((e: Edits) => Edits)) => {
     setEdits((prev) => {
@@ -172,8 +175,8 @@ export default function App() {
   const zooms = useMemo(() => (edits ? liveZooms(edits) : []), [edits]);
   const captions = edits?.captions ?? { on: false, style: "bold" as CaptionStyle };
   const cues = useMemo(
-    () => (edits && captions.on ? captionCues(words, keptSet(words.length, edits), ranges) : []),
-    [edits, captions.on, words, ranges],
+    () => (edits && captions.on ? captionCues(words, new Set(kinds.flatMap((k, i) => (k ? [] : [i]))), ranges) : []),
+    [edits, captions.on, words, ranges, kinds],
   );
   // For the transcript: which words sit in a zoom, and whether it's Claude's unreviewed one.
   const zoomKinds = useMemo(() => {
@@ -262,6 +265,10 @@ export default function App() {
     } else player.current?.seekSource(w.start);
   };
 
+  // Cutting or restoring words in the transcript overrides timeline trims on them.
+  const clearWordTrims = (e: Edits, first: number, last: number) =>
+    clearTrims(e, words[first].start - PARAMS.padIn, words[last].end + PARAMS.padOut);
+
   const toggleZoom = (first: number, last: number) => {
     const overlaps = zooms.some((z) => z.first <= last && z.last >= first);
     change((x) => (overlaps ? removeZooms(x, first, last) : addZoom(x, first, last)));
@@ -279,7 +286,7 @@ export default function App() {
         player.current?.toggle();
       } else if ((e.key === "Backspace" || e.key === "Delete") && selection) {
         e.preventDefault();
-        change((x) => cutWords(x, selection.first, selection.last));
+        change((x) => cutWords(clearWordTrims(x, selection.first, selection.last), selection.first, selection.last));
         setSelection(null);
       } else if (!mod && e.key.toLowerCase() === "z" && selection) {
         e.preventDefault();
@@ -406,8 +413,8 @@ export default function App() {
               if (c >= 0) setFocus(c);
             }}
             onSeekWord={seekWord}
-            onCut={(s) => (change((x) => cutWords(x, s.first, s.last)), setSelection(null))}
-            onRestore={(s) => (change((x) => restoreWords(x, s.first, s.last)), setSelection(null))}
+            onCut={(s) => (change((x) => cutWords(clearWordTrims(x, s.first, s.last), s.first, s.last)), setSelection(null))}
+            onRestore={(s) => (change((x) => restoreWords(clearWordTrims(x, s.first, s.last), s.first, s.last)), setSelection(null))}
             onZoom={(s) => toggleZoom(s.first, s.last)}
           />
         </div>
@@ -508,6 +515,7 @@ export default function App() {
 
       <Timeline
         ranges={ranges}
+        duration={project.info.duration}
         peaks={peaks}
         time={state.time}
         playing={state.playing}
@@ -515,7 +523,9 @@ export default function App() {
         fps={project.info.fps}
         words={words}
         zooms={edits.zooms ?? []}
-        onZoomEdit={(i, first, last) => change((x) => moveZoom(x, i, first, last))}
+        onZoomEdit={(i, start, end) => change((x) => setZoomTimes(x, words, i, start, end))}
+        onTrim={(i, start, end) => change((x) => trimClip(x, ranges, i, start, end))}
+        onDeleteClip={(i) => change((x) => deleteClip(x, ranges, i))}
         onScrub={(t) => player.current?.seek(t)}
       />
 

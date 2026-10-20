@@ -19,6 +19,14 @@ import {
   liveZooms,
   pendingCount,
   setZoomStatus,
+  applyTrims,
+  clearTrims,
+  deleteClip,
+  editRanges,
+  setZoomTimes,
+  shownKinds,
+  trimClip,
+  zoomSpan,
   type Edits,
   type Word,
 } from "./edl";
@@ -140,5 +148,45 @@ describe("captions", () => {
     expect(cues).toHaveLength(6);
     expect(cueAt(cues, cues[1].start + 0.01)?.active).toBe(1);
     for (let i = 1; i < cues.length; i++) expect(cues[i].start).toBeGreaterThanOrEqual(cues[i - 1].end - 1e-9);
+  });
+});
+
+describe("timeline trims", () => {
+  const base: Edits = { version: 1, agent: [], user: [], log: [] };
+
+  it("cut and keep exact stretches of source time", () => {
+    expect(applyTrims([[0, 2], [3, 5]], [{ start: 1.5, end: 3.5, keep: false }], 6)).toEqual([[0, 1.5], [3.5, 5]]);
+    expect(applyTrims([[0, 2], [3, 5]], [{ start: 2, end: 3, keep: true }], 6)).toEqual([[0, 5]]);
+    // Later trims win.
+    const trims = [{ start: 1, end: 4, keep: false }, { start: 1.5, end: 2, keep: true }];
+    expect(applyTrims([[0, 5]], trims, 6)).toEqual([[0, 1], [1.5, 2], [4, 5]]);
+  });
+
+  it("trim a clip's ends in or out, delete a clip, and show it in the transcript", () => {
+    const e = fromDecisions(decisions);
+    const ranges = editRanges(SAMPLE, e, 6);
+    expect(ranges).toHaveLength(1);
+    const [a, b] = ranges[0];
+    // Pull the end in past "goes." and push the start out into the pause before.
+    const t = trimClip(e, ranges, 0, a - 0.5, 5.25);
+    const r2 = editRanges(SAMPLE, t, 6);
+    expect(r2[0][0]).toBeCloseTo(a - 0.5);
+    expect(r2[r2.length - 1][1]).toBeCloseTo(5.25);
+    expect(shownKinds(SAMPLE, t, r2)[12]).toBe("user"); // "goes." now reads as cut
+    expect(b).toBeGreaterThan(5.25);
+    // Delete the whole clip.
+    const d = deleteClip(e, ranges, 0);
+    expect(editRanges(SAMPLE, d, 6)).toEqual([]);
+    // Restoring words in the transcript lifts trims over them.
+    const back = clearTrims(d, SAMPLE[7].start - 0.08, SAMPLE[8].end + 0.15);
+    expect(editRanges(SAMPLE, back, 6).length).toBeGreaterThan(0);
+  });
+
+  it("move zooms to exact times", () => {
+    let e: Edits = { ...base, zooms: [{ first: 2, last: 4, scale: 1.3, x: 0.5, y: 0.4, by: "agent", status: "pending" }] };
+    e = setZoomTimes(e, SAMPLE, 0, 1.33, 2.07);
+    expect(zoomSpan(SAMPLE, e.zooms![0])).toEqual([1.33, 2.07]);
+    expect([e.zooms![0].first, e.zooms![0].last]).toEqual([1, 5]);
+    expect(e.zooms![0].status).toBe("accepted");
   });
 });
