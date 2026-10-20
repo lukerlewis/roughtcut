@@ -395,3 +395,27 @@ body.dragging-fx, body.dragging-fx * { cursor: grabbing !important; }
 .library .add-image { margin-top: 6px; }
 .effect-sub { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-weight: 500; font-size: 12px; }
 .seg.wrap { flex-wrap: wrap; } .seg.wrap button { flex: 1 0 30%; }
+.library .find { width: 100%; margin-bottom: 8px; }
+.library .graphic-group { margin-bottom: 10px; }
+.library .group-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--muted-foreground); margin-bottom: 6px; min-height: 24px; }
+.library .group-head .btn { height: 22px; padding: 0 6px; font-size: 12px; }
+.library .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.library .card { display: flex; flex-direction: column; gap: 4px; padding: 4px; border-radius: 8px; border: 1px solid var(--stroke); background: var(--card); cursor: grab; user-select: none; min-width: 0; }
+.library .card:hover { background: var(--selected); }
+.library .card .poster { aspect-ratio: 16 / 9; border-radius: 5px; overflow: hidden; background: repeating-conic-gradient(var(--muted) 0 25%, transparent 0 50%) 0 0 / 12px 12px; }
+.library .card .poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.library .card .label { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px; }
+.graphics-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.graphics-layer .graphic { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.graphics-layer .graphic iframe { border: 0; display: block; background: transparent; pointer-events: none; color-scheme: normal; }
+.graphics-layer .graphic.editing { pointer-events: auto; cursor: move; outline: 4px dashed rgba(255, 255, 255, 0.7); }
+.effect .setting.color input { width: 36px; height: 22px; padding: 0; border: 1px solid var(--stroke); border-radius: 6px; background: none; }
+.effect textarea.field { width: 100%; resize: vertical; font: inherit; font-size: 12px; }
+.style .brand .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.style .brand .pair .setting { flex-direction: column; align-items: stretch; gap: 4px; }
+.style .brand select { height: 26px; border-radius: 7px; border: 1px solid var(--stroke); background: var(--card); color: var(--foreground); font: inherit; font-size: 12px; }
+.style .brand .setting.color input { width: 36px; height: 22px; padding: 0; border: 1px solid var(--stroke); border-radius: 6px; background: none; }
+.brand-sample { display: flex; align-items: stretch; gap: 10px; margin-top: 10px; padding: 10px 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
+.brand-sample .bar { width: 4px; border-radius: 2px; }
+.brand-sample > span:last-child { display: flex; flex-direction: column; gap: 2px; font-size: 15px; }
+.brand-sample > span:last-child span { font-size: 12px; opacity: 0.7; }

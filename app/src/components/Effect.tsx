@@ -1,7 +1,9 @@
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bookmark, Check, EyeOff, Film, Gauge, ImageIcon, LayoutPanelLeft, MessageSquare, Play, Send, Trash2, Type, User, X, ZoomIn } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bookmark, Check, Clapperboard, EyeOff, Film, Gauge, ImageIcon, LayoutPanelLeft, MessageSquare, Play, Send, Trash2, Type, User, X, ZoomIn } from "lucide-react";
 import { useEffect, useState } from "react";
 import { motionOf, partsOf } from "../lib/graphics";
-import { MOTION_DEFAULTS, TEXT_DEFAULTS, ZOOM_EASE, type Direction, type Easing, type Motion, type MotionStep, timecode, zoomSpan, type Background, type BlurFx, type Clip, type LayoutMode, type Rendered, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
+import { settingsOf, textsOf, type Setting } from "../lib/graphicView";
+import type { CatalogGraphic } from "../lib/backend";
+import { MOTION_DEFAULTS, TEXT_DEFAULTS, ZOOM_EASE, type Direction, type Easing, type Motion, type MotionStep, timecode, zoomSpan, type Background, type BlurFx, type Clip, type LayoutMode, type Rendered, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom, type Graphic } from "../lib/edl";
 
 export type Look = { scale: number; x: number; y: number };
 
@@ -31,6 +33,11 @@ interface Props {
   onZoomEase: (ease: { easeIn?: number; easeOut?: number }) => void;
   onPreview: () => void; // play the effect from just before it
   onMotionDefault: (style: TextStyle, motion: Motion) => void; // new graphics of this kind move like this
+  graphic?: Graphic;
+  graphicSource: string | null; // its page as made, for its words and settings
+  graphicParams: CatalogGraphic["params"];
+  onGraphic: (patch: Partial<Graphic>) => void;
+  onAskGraphic: (text: string) => void; // Claude changes it
 }
 
 const STYLES: [TextStyle, string][] = [
@@ -640,7 +647,158 @@ function ZoomEase({ z, length, p }: { z: Zoom; length: number; p: Props }) {
   );
 }
 
+/** One setting of a motion graphic: a colour, a number or some text. */
+function SettingField({ s, value, onSave }: { s: Setting; value: string | number; onSave: (v: string | number) => void }) {
+  const [draft, setDraft] = useState<string | number | null>(null);
+  const shown = draft ?? value;
+  const commit = () => {
+    if (draft !== null && draft !== value) onSave(draft);
+    setDraft(null);
+  };
+  if (s.type === "color")
+    return (
+      <label className="setting color">
+        <span>{s.label}</span>
+        <input type="color" value={String(shown).slice(0, 7)} onChange={(e) => setDraft(e.target.value)} onBlur={commit} />
+      </label>
+    );
+  if (s.type === "number")
+    return (
+      <>
+        <label className="setting">
+          <span>{s.label}</span>
+          <span className="mono">{shown}</span>
+        </label>
+        <input
+          type="range"
+          min={s.min ?? 0}
+          max={s.max ?? Math.max(10, Number(s.default) * 3)}
+          step={s.step ?? 1}
+          value={Number(shown)}
+          onChange={(e) => setDraft(Number(e.target.value))}
+          onPointerUp={commit}
+          onKeyUp={commit}
+          onBlur={commit}
+        />
+      </>
+    );
+  const long = String(value).includes("\n");
+  return (
+    <>
+      <label className="setting">
+        <span>{s.label}</span>
+      </label>
+      {long ? (
+        <textarea className="field" rows={5} value={String(shown)} onChange={(e) => setDraft(e.target.value)} onBlur={commit} onKeyDown={(e) => e.stopPropagation()} />
+      ) : (
+        <Field value={String(value)} placeholder="" onSave={onSave} />
+      )}
+    </>
+  );
+}
+
+function GraphicSettings({ g, p }: { g: Graphic; p: Props }) {
+  const [ask, setAsk] = useState("");
+  const [scale, setScale] = useState<number | null>(null);
+  const src = p.graphicSource;
+  const words = src ? textsOf(src) : [];
+  const settings = src ? settingsOf(src, p.graphicParams) : [];
+  const setWord = (i: number, text: string) => {
+    const texts = { ...g.texts };
+    if (text === words[i]) delete texts[i];
+    else texts[i] = text;
+    p.onGraphic({ texts });
+  };
+  const commitScale = () => {
+    if (scale !== null) p.onGraphic({ scale });
+    setScale(null);
+  };
+  return (
+    <div className="panel-body effect">
+      <div className="effect-head">
+        <Clapperboard size={15} /> <span>{g.name}</span>
+        {g.status === "pending" && <span className="dot" title="Claude's, not reviewed yet" />}
+      </div>
+      <p className="why">
+        {g.reason && <>{g.reason} </>}
+        <span className="mono">
+          {timecode(g.start, 30, true)} to {timecode(g.end, 30, true)}
+        </span>
+      </p>
+      {!src && <p className="hint">Loading…</p>}
+      {words.length > 0 && <div className="effect-sub">Words</div>}
+      {words.slice(0, 24).map((w, i) => (
+        <Field key={i} value={g.texts?.[i] ?? w} placeholder={w} onSave={(t) => setWord(i, t)} />
+      ))}
+      {settings.length > 0 && <div className="effect-sub">Settings</div>}
+      {settings.map((s) => (
+        <SettingField key={s.key} s={s} value={g.params?.[s.key] ?? s.default} onSave={(v) => p.onGraphic({ params: { ...g.params, [s.key]: v } })} />
+      ))}
+      <div className="effect-sub">Look</div>
+      <div className="seg wide">
+        <button className={g.brand !== false ? "on" : ""} onClick={() => g.brand === false && p.onGraphic({ brand: true })} title="Your font and colours, from Style">
+          Your brand
+        </button>
+        <button className={g.brand === false ? "on" : ""} onClick={() => g.brand !== false && p.onGraphic({ brand: false })}>
+          As made
+        </button>
+      </div>
+      <div className="effect-sub">Place</div>
+      <label className="setting">
+        <span>Size</span>
+        <span className="mono">{Math.round((scale ?? g.scale ?? 1) * 100)}%</span>
+      </label>
+      <input
+        type="range"
+        min={20}
+        max={200}
+        value={Math.round((scale ?? g.scale ?? 1) * 100)}
+        onChange={(e) => setScale(Number(e.target.value) / 100)}
+        onPointerUp={commitScale}
+        onKeyUp={commitScale}
+        onBlur={commitScale}
+      />
+      <p className="hint">Drag it on the video to move it, or its ends on the timeline to change when it shows.</p>
+      {(g.x || g.y || (g.scale ?? 1) !== 1) && (
+        <button className="btn ghost" onClick={() => p.onGraphic({ x: 0, y: 0, scale: 1 })}>
+          Put it back where it was made to sit
+        </button>
+      )}
+      <div className="effect-sub">Ask Claude to change it</div>
+      <textarea
+        className="field"
+        rows={3}
+        value={ask}
+        placeholder="Make the numbers 12, 40 and 90, and use my green"
+        onChange={(e) => setAsk(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter" && !e.shiftKey && ask.trim()) {
+            e.preventDefault();
+            p.onAskGraphic(ask.trim());
+            setAsk("");
+          }
+        }}
+      />
+      <div className="actions wrap">
+        {g.status === "pending" && (
+          <button className="btn" onClick={p.onKeep}>
+            <Check size={14} /> Keep
+          </button>
+        )}
+        <button className="btn ghost" onClick={p.onPreview}>
+          <Play size={14} /> Play it
+        </button>
+        <button className="btn ghost" onClick={p.onRemove}>
+          {g.status === "pending" ? <X size={14} /> : <Trash2 size={14} />} Remove graphic
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Effect(p: Props) {
+  if (p.graphic) return <GraphicSettings g={p.graphic} p={p} />;
   if (p.clip?.layout) return <LayoutSettings c={p.clip} p={p} />;
   if (p.clip?.background) return <BackgroundSettings c={p.clip} p={p} />;
   if (p.speed) return <SpeedSettings x={p.speed} p={p} />;

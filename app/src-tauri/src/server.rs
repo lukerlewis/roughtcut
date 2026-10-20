@@ -3,7 +3,10 @@
 //! own network stack this way, which copes with the constant cancelled and
 //! restarted range requests of scrubbing. (Tauri's asset protocol crashed the
 //! app when WebKit cancelled a request while it was in the background.)
-//! Only recordings the app opened are served, under a random token.
+//! Only recordings the app opened are served, under a random token, plus
+//! the project's motion graphics folder (a graphic loads its own fonts and
+//! scripts). A graphic asked for with `?preview` gets the HyperFrames
+//! runtime and the editor's bridge added, so the viewer can seek it.
 
 use std::collections::HashSet;
 use std::fs::File;
@@ -16,7 +19,10 @@ pub struct Server {
     port: u16,
     token: String,
     allowed: Arc<Mutex<HashSet<PathBuf>>>,
+    dirs: Arc<Mutex<HashSet<PathBuf>>>,
 }
+
+const BRIDGE: &str = include_str!("graphics-bridge.js");
 
 fn token() -> String {
     let mut bytes = [0u8; 16];
@@ -31,13 +37,13 @@ impl Server {
     pub fn start() -> io::Result<Server> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
-        let server = Server { port, token: token(), allowed: Arc::default() };
-        let (token, allowed) = (server.token.clone(), server.allowed.clone());
+        let server = Server { port, token: token(), allowed: Arc::default(), dirs: Arc::default() };
+        let (token, allowed, dirs) = (server.token.clone(), server.allowed.clone(), server.dirs.clone());
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                let (token, allowed) = (token.clone(), allowed.clone());
+                let (token, allowed, dirs) = (token.clone(), allowed.clone(), dirs.clone());
                 std::thread::spawn(move || {
-                    let _ = serve(stream, &token, &allowed);
+                    let _ = serve(stream, &token, &allowed, &dirs);
                 });
             }
         });
@@ -48,6 +54,28 @@ impl Server {
     pub fn url(&self, path: &Path) -> String {
         self.allowed.lock().unwrap().insert(path.to_path_buf());
         format!("http://127.0.0.1:{}/{}/{}", self.port, self.token, encode(&path.to_string_lossy()))
+    }
+
+    /// The URL of `dir`, everything under which may from now on be served.
+    pub fn dir_url(&self, dir: &Path) -> String {
+        self.dirs.lock().unwrap().insert(dir.to_path_buf());
+        format!("http://127.0.0.1:{}/{}/{}", self.port, self.token, encode(&dir.to_string_lossy()))
+    }
+}
+
+/// Inside a served folder, with no way out of it.
+fn under(path: &Path, dirs: &HashSet<PathBuf>) -> bool {
+    !path.components().any(|c| matches!(c, std::path::Component::ParentDir)) && dirs.iter().any(|d| path.starts_with(d))
+}
+
+/// A graphic's page with the runtime (from the project's graphics/lib) and the bridge added.
+fn preview_page(html: &str, token: &str) -> String {
+    let tags = format!(
+        "<script src=\"../lib/hyperframes-runtime.js\" data-hyperframes-preview-runtime></script>\n<script src=\"/{token}/_roughcut/bridge.js\"></script>\n"
+    );
+    match html.find("</head>") {
+        Some(i) => format!("{}{tags}{}", &html[..i], &html[i..]),
+        None => format!("{tags}{html}"),
     }
 }
 
@@ -110,7 +138,7 @@ fn range(header: &str, len: u64) -> Option<(u64, u64)> {
 }
 
 /// Answers requests on one connection until the player closes it.
-fn serve(stream: TcpStream, token: &str, allowed: &Mutex<HashSet<PathBuf>>) -> io::Result<()> {
+fn serve(stream: TcpStream, token: &str, allowed: &Mutex<HashSet<PathBuf>>, dirs: &Mutex<HashSet<PathBuf>>) -> io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut out = stream;
     loop {
@@ -135,11 +163,31 @@ fn serve(stream: TcpStream, token: &str, allowed: &Mutex<HashSet<PathBuf>>) -> i
                 }
             }
         }
-        let path = target
-            .strip_prefix('/')
-            .and_then(|t| t.strip_prefix(token))
-            .map(|p| PathBuf::from(decode(p.split('?').next().unwrap_or(p))));
-        let path = path.filter(|p| allowed.lock().unwrap().contains(p));
+        let rest = target.strip_prefix('/').and_then(|t| t.strip_prefix(token));
+        let preview = rest.and_then(|p| p.split_once('?')).is_some_and(|(_, q)| q.split('&').any(|k| k == "preview"));
+        // Small generated bodies: the bridge, and graphics with it added.
+        let body: Option<(String, &str)> = if rest == Some("/_roughcut/bridge.js") {
+            Some((BRIDGE.to_string(), "text/javascript"))
+        } else {
+            None
+        };
+        let path = rest.map(|p| PathBuf::from(decode(p.split('?').next().unwrap_or(p))));
+        let path = path.filter(|p| allowed.lock().unwrap().contains(p) || under(p, &dirs.lock().unwrap()));
+        let body = body.or_else(|| {
+            let p = path.as_ref().filter(|p| preview && p.extension().is_some_and(|e| e == "html"))?;
+            Some((preview_page(&std::fs::read_to_string(p).ok()?, token), "text/html; charset=utf-8"))
+        });
+        if let Some((text, kind)) = body {
+            write!(out, "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\nContent-Length: {}\r\n\r\n", text.len())?;
+            if method == "GET" {
+                out.write_all(text.as_bytes())?;
+            }
+            out.flush()?;
+            if close {
+                return Ok(());
+            }
+            continue;
+        }
         let (Some(path), true) = (path, method == "GET" || method == "HEAD") else {
             write!(out, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")?;
             if close {

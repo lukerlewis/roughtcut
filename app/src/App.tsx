@@ -7,6 +7,8 @@ import { Record } from "./components/Record";
 import { Menu } from "./components/Menu";
 import { Versions } from "./components/Versions";
 import { Library, type Asset, type LibraryItem } from "./components/Library";
+import { GraphicsLayer, type PlacedGraphic } from "./components/GraphicsLayer";
+import { viewHtml } from "./lib/graphicView";
 import { Effect, type Look } from "./components/Effect";
 import { Timeline, type Effect as Picked } from "./components/Timeline";
 import { Transcript, type Selection } from "./components/Transcript";
@@ -19,6 +21,8 @@ import { drawAt, graphicsLayer, loadImage, type Placed } from "./lib/graphics";
 import {
   acceptAll,
   addText,
+  addGraphic,
+  setGraphic,
   MOTION_DEFAULTS,
   type Motion,
   addNote,
@@ -352,11 +356,12 @@ export default function App() {
   const picked = effect?.kind === "zoom" ? edits?.zooms?.[effect.index] : undefined;
   const pickedClip = effect?.kind === "clip" ? edits?.clips?.[effect.index] : undefined;
   const pickedText = effect?.kind === "text" ? edits?.texts?.[effect.index] : undefined;
+  const pickedGraphic = effect?.kind === "graphic" ? edits?.graphics?.[effect.index] : undefined;
   const pickedNote = effect?.kind === "note" ? edits?.notes?.[effect.index] : undefined;
   const voiceOn = !!(edits?.voice?.level || edits?.voice?.clean);
   const pickedSpeed = effect?.kind === "speed" ? edits?.speeds?.[effect.index] : undefined;
   const pickedBlur = effect?.kind === "blur" ? edits?.blurs?.[effect.index] : undefined;
-  const pickedAny = picked || pickedClip || pickedText || pickedNote || pickedSpeed || pickedBlur;
+  const pickedAny = picked || pickedClip || pickedText || pickedNote || pickedSpeed || pickedBlur || !!pickedGraphic;
   // While a zoom's or blur's settings are open the video shows whole, with a box to drag.
   const zoom = picked || pickedBlur ? null : zoomAt(words, zooms, state.source);
   // Blurs: shown live over the video; the picked one is a box to move and resize.
@@ -545,6 +550,88 @@ export default function App() {
     }), 0);
   };
 
+  // --- Motion graphics ------------------------------------------------------
+  const [brand, setBrand] = useState<backend.Brand | undefined>(); // Luke's look, from Style
+  // HyperFrames compositions in the project's graphics folder, shown over the
+  // video in frames. Each one's page is rewritten with its settings when they
+  // change, then reloaded.
+  const [catalog, setCatalog] = useState<backend.CatalogGraphic[]>([]);
+  useEffect(() => {
+    backend.graphicsCatalog().then(setCatalog, () => setCatalog([]));
+  }, []);
+  const [graphicsBase, setGraphicsBase] = useState<string | null>(null);
+  useEffect(() => {
+    if (project) backend.graphicsUrl(project.folder).then(setGraphicsBase, () => setGraphicsBase(null));
+  }, [project?.folder]);
+  const placedGraphics: PlacedGraphic[] = useMemo(
+    () =>
+      (edits?.graphics ?? []).flatMap((g, index) => {
+        if (g.status === "restored") return [];
+        const [a, b] = [sourceToCut(ranges, g.start), sourceToCut(ranges, g.end)];
+        return b - a > 0.05 ? [{ g, index, start: a, end: b }] : [];
+      }),
+    [edits, ranges],
+  );
+  const graphicSources = useRef(new Map<string, string>()); // slug@rev -> source.html
+  const sourceOf = async (slug: string, rev = 0) => {
+    const key = `${slug}@${rev}`;
+    if (!graphicSources.current.has(key)) graphicSources.current.set(key, await backend.graphicSource(project!.folder, slug));
+    return graphicSources.current.get(key)!;
+  };
+  const writtenViews = useRef(new Map<string, string>());
+  const [graphicVersions, setGraphicVersions] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (!project) return;
+    for (const p of placedGraphics) {
+      const length = Math.round((p.end - p.start) * 100) / 100;
+      const sig = JSON.stringify([p.g.params, p.g.texts, p.g.rev, p.g.brand, length, brand]);
+      if (writtenViews.current.get(p.g.slug) === sig) continue;
+      writtenViews.current.set(p.g.slug, sig);
+      sourceOf(p.g.slug, p.g.rev)
+        .then((src) => backend.saveGraphicView(project.folder, p.g.slug, viewHtml(src, p.g, length, brand)))
+        .then(() => setGraphicVersions((v) => ({ ...v, [p.g.slug]: (v[p.g.slug] ?? 0) + 1 })))
+        .catch((e) => setNotice(String(e)));
+    }
+  }, [placedGraphics, project, brand]);
+  const [pickedSource, setPickedSource] = useState<string | null>(null);
+  useEffect(() => {
+    setPickedSource(null);
+    if (pickedGraphic && project) sourceOf(pickedGraphic.slug, pickedGraphic.rev).then(setPickedSource, () => {});
+  }, [pickedGraphic?.slug, pickedGraphic?.rev, project?.folder]);
+
+  /** A catalogue graphic where it was dropped (or from the playhead), for its own length. */
+  const newGraphic = async (name: string) => {
+    if (!edits || !project) return;
+    player.current?.pause();
+    const item = catalog.find((c) => c.name === name);
+    const want = Math.max(1, item?.duration ?? 5);
+    const length = sourceToCut(ranges, project.info.duration);
+    let a = placing.current ?? state.time;
+    let b = Math.min(length, a + want);
+    if (b - a < Math.min(1, want)) [a, b] = [Math.max(0, length - want), length];
+    const [start, end] = [cutToSource(ranges, a).source, cutToSource(ranges, b).source];
+    try {
+      const slug = await backend.addCatalogGraphic(project.folder, name);
+      const index = edits.graphics?.length ?? 0;
+      change((x) => addGraphic(x, slug, item?.title ?? name, start, end, name));
+      setSelection(null);
+      player.current?.seekSource(cutToSource(ranges, a + Math.min(1.5, (b - a) / 2)).source);
+      setTimeout(() => pickEffect({ kind: "graphic", index }), 0);
+    } catch (e) {
+      setNotice(String(e));
+    }
+  };
+  const askAboutGraphic = (text: string) => {
+    if (!pickedGraphic || !effect) return;
+    setTab("chat");
+    void ask(
+      `Change the motion graphic "${pickedGraphic.name}" (graphic ${effect.index}, in graphics/${pickedGraphic.slug}/source.html): ${text}\n` +
+        "Read it with get_graphic, then save the whole new page with update_graphic. Keep it a valid HyperFrames composition.",
+      edits,
+      `${pickedGraphic.name}: ${text}`,
+    );
+  };
+
   // Luke's saved assets (title cards and the like), the same in every video.
   const [assets, setAssets] = useState<Asset[]>([]);
   useEffect(() => {
@@ -554,7 +641,7 @@ export default function App() {
   // How each kind of graphic moves unless Luke changes it: his saved defaults over the built-in ones.
   const [motionDefaults, setMotionDefaults] = useState<Record<TextStyle, Motion>>(MOTION_DEFAULTS);
   useEffect(() => {
-    backend.loadStyle().then((s) => setMotionDefaults({ ...MOTION_DEFAULTS, ...s.motion }), () => {});
+    backend.loadStyle().then((s) => (setMotionDefaults({ ...MOTION_DEFAULTS, ...s.motion }), setBrand(s.brand)), () => {});
   }, []);
   const makeMotionDefault = (style: TextStyle, motion: Motion) => {
     setMotionDefaults((m) => ({ ...m, [style]: motion }));
@@ -613,6 +700,7 @@ export default function App() {
       else if (item.kind === "background") newBackground();
       else if (item.kind === "layout") newLayout();
       else if (item.kind === "note") newNote();
+      else if (item.kind === "graphic") void newGraphic(item.name);
     } finally {
       placing.current = null;
     }
@@ -1009,6 +1097,7 @@ export default function App() {
               onZoomToClicks={zoomToClicks}
               onAddImage={() => void addImage()}
               imageUrl={(src) => imageUrls[src]}
+              catalog={catalog}
             />
           ) : (
           <Transcript
@@ -1056,6 +1145,14 @@ export default function App() {
                   <span className="handle" title="Drag to resize" onPointerDown={(e) => dragBlur(e, "size")} />
                 </div>
               )}
+              <GraphicsLayer
+                placed={placedGraphics}
+                time={state.time}
+                base={graphicsBase}
+                versions={graphicVersions}
+                picked={pickedGraphic && effect ? effect.index : null}
+                onMove={(index, x, y) => change((e) => setGraphic(e, index, { x, y }))}
+              />
               <canvas
                 ref={gfx}
                 className={`graphics ${pickedText ? "editing" : ""}`}
@@ -1139,7 +1236,7 @@ export default function App() {
             )}
           </div>
           {tab === "style" ? (
-            <Style folder={project.folder} />
+            <Style folder={project.folder} onChange={(st) => setBrand(st.brand)} />
           ) : tab === "versions" ? (
             <Versions
               folder={project.folder}
@@ -1178,6 +1275,11 @@ export default function App() {
               }}
               onZoomEase={(ease) => effect && change((x) => setZoomEase(x, effect.index, ease))}
               onMotionDefault={makeMotionDefault}
+              graphic={pickedGraphic}
+              graphicSource={pickedSource}
+              graphicParams={catalog.find((c) => c.name === pickedGraphic?.from)?.params ?? []}
+              onGraphic={(patch) => effect && change((x) => setGraphic(x, effect.index, patch))}
+              onAskGraphic={askAboutGraphic}
               onPreview={() => {
                 if (!effect) return;
                 const at = effectStart(edits, words, effect);

@@ -12,7 +12,7 @@ export interface FxItem {
   end: number;
   label: string;
   pending: boolean; // Claude's and unreviewed: drawn blue
-  icon?: "film" | "text" | "image" | "zoom" | "blur" | "speed" | "layout" | "audio";
+  icon?: "film" | "text" | "image" | "graphic" | "zoom" | "blur" | "speed" | "layout" | "audio";
   /** How far its ends can go (e.g. a clip can't run past its file). */
   bounds?: [number, number];
 }
@@ -115,6 +115,18 @@ function glyph(g: CanvasRenderingContext2D, icon: FxItem["icon"], x: number, y: 
       g.moveTo(x + 1.5, y + 8.5);
       g.lineTo(x + 4.5, y + 4);
       g.lineTo(x + 8.5, y + 8.5);
+      g.fill();
+      break;
+    case "graphic":
+      // a play triangle in a frame: something that moves
+      g.fillRect(x, y, 10, 1.5);
+      g.fillRect(x, y + 8.5, 10, 1.5);
+      g.fillRect(x, y, 1.5, 10);
+      g.fillRect(x + 8.5, y, 1.5, 10);
+      g.beginPath();
+      g.moveTo(x + 3.5, y + 3);
+      g.lineTo(x + 7, y + 5);
+      g.lineTo(x + 3.5, y + 7);
       g.fill();
       break;
     case "blur":

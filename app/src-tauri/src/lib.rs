@@ -6,6 +6,7 @@
 mod assets;
 mod claude;
 mod edits;
+mod graphics;
 mod markers;
 mod mcp;
 mod matte;
@@ -316,6 +317,35 @@ fn import_image(path: String) -> Result<String, String> {
     assets::import_image(Path::new(&path)).map(|p| p.to_string_lossy().to_string())
 }
 
+/// The motion graphics that ship with the app.
+#[tauri::command]
+fn graphics_catalog() -> Value {
+    graphics::catalog()
+}
+
+/// Copies a catalogue graphic into the project; returns its folder name.
+#[tauri::command]
+fn add_catalog_graphic(folder: String, name: String) -> Result<String, String> {
+    graphics::add_from_catalog(Path::new(&folder), &name)
+}
+
+#[tauri::command]
+fn graphic_source(folder: String, slug: String) -> Result<String, String> {
+    graphics::source(Path::new(&folder), &slug)
+}
+
+/// Writes the graphic with Luke's settings applied (what plays and renders).
+#[tauri::command]
+fn save_graphic_view(folder: String, slug: String, html: String) -> Result<(), String> {
+    graphics::write_view(Path::new(&folder), &slug, &html)
+}
+
+/// Where the viewer loads the project's graphics from.
+#[tauri::command]
+fn graphics_url(server: tauri::State<server::Server>, folder: String) -> String {
+    server.dir_url(&Path::new(&folder).join("graphics"))
+}
+
 /// Rules Claude suggests from what Luke corrected in this project.
 #[tauri::command]
 async fn suggest_rules(folder: String) -> Result<Value, String> {
@@ -430,6 +460,11 @@ pub fn run() {
             load_assets,
             set_motion_default,
             import_image,
+            graphics_catalog,
+            add_catalog_graphic,
+            graphic_source,
+            save_graphic_view,
+            graphics_url,
             save_assets,
             save_version,
             open_version,

@@ -1,6 +1,98 @@
 import { Check, Plus, Sparkles, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { loadStyle, saveStyle, suggestRules, type Style as StyleData, type StyleSettings, type Suggestion } from "../lib/backend";
+import { loadStyle, saveStyle, suggestRules, type Brand, type Style as StyleData, type StyleSettings, type Suggestion } from "../lib/backend";
+
+// Fonts every Mac has, offered as a start; any installed font works by name.
+const FONTS = ["SF Pro Display", "Helvetica Neue", "Avenir Next", "Futura", "Gill Sans", "Optima", "Didot", "Georgia", "Baskerville", "Menlo"];
+
+const COLOURS: { key: keyof Brand; label: string; fallback: string }[] = [
+  { key: "ink", label: "Text", fallback: "#111111" },
+  { key: "paper", label: "Background", fallback: "#ffffff" },
+  { key: "accent", label: "Accent", fallback: "#ff5a36" },
+  { key: "accent2", label: "Second accent", fallback: "#2756ff" },
+];
+
+/** Luke's font, weights, colours and roundness, which every motion graphic takes on. */
+function BrandSettings({ brand, onSave }: { brand: Brand; onSave: (b: Brand) => void }) {
+  const [font, setFont] = useState(brand.font ?? "");
+  const [radius, setRadius] = useState<number | null>(null);
+  useEffect(() => setFont(brand.font ?? ""), [brand.font]);
+  const set = (patch: Partial<Brand>) => onSave({ ...brand, ...patch });
+  return (
+    <div className="settings brand">
+      <div className="section-title">Your brand</div>
+      <p className="hint">Every motion graphic uses these, and Claude makes new ones with them.</p>
+      <label className="setting">
+        <span>Font</span>
+      </label>
+      <input
+        className="field"
+        list="brand-fonts"
+        value={font}
+        placeholder="Any font on your Mac, by name"
+        onChange={(e) => setFont(e.target.value)}
+        onBlur={() => font.trim() !== (brand.font ?? "") && set({ font: font.trim() || undefined })}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+      />
+      <datalist id="brand-fonts">
+        {FONTS.map((f) => (
+          <option key={f} value={f} />
+        ))}
+      </datalist>
+      <div className="pair">
+        <label className="setting">
+          <span>Headlines</span>
+          <select value={brand.bold ?? 700} onChange={(e) => set({ bold: Number(e.target.value) })}>
+            {[500, 600, 700, 800, 900].map((w) => (
+              <option key={w} value={w}>
+                {w}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="setting">
+          <span>Everything else</span>
+          <select value={brand.regular ?? 400} onChange={(e) => set({ regular: Number(e.target.value) })}>
+            {[300, 400, 500].map((w) => (
+              <option key={w} value={w}>
+                {w}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {COLOURS.map(({ key, label, fallback }) => (
+        <label key={key} className="setting color">
+          <span>{label}</span>
+          <input type="color" value={(brand[key] as string | undefined) ?? fallback} onChange={(e) => set({ [key]: e.target.value })} />
+        </label>
+      ))}
+      <label className="setting">
+        <span>Corners</span>
+        <span className="mono">{radius ?? brand.radius ?? 12}px</span>
+      </label>
+      <input
+        type="range"
+        min={0}
+        max={40}
+        value={radius ?? brand.radius ?? 12}
+        onChange={(e) => setRadius(Number(e.target.value))}
+        onPointerUp={() => (radius !== null && set({ radius }), setRadius(null))}
+        onBlur={() => (radius !== null && set({ radius }), setRadius(null))}
+      />
+      <div className="brand-sample" style={{ fontFamily: brand.font ? `"${brand.font}", sans-serif` : undefined, background: brand.paper ?? "#fff", color: brand.ink ?? "#111", borderRadius: (brand.radius ?? 12) / 2 }}>
+        <span className="bar" style={{ background: brand.accent ?? "#ff5a36" }} />
+        <span>
+          <b style={{ fontWeight: brand.bold ?? 700 }}>Luke Lewis</b>
+          <span style={{ fontWeight: brand.regular ?? 400 }}>Building Roughcut</span>
+        </span>
+      </div>
+    </div>
+  );
+}
 
 const DEFAULTS: Required<StyleSettings> = { maxPause: 0.35, padIn: 0.08, padOut: 0.15 };
 
@@ -12,7 +104,7 @@ const SETTINGS: { key: keyof StyleSettings; label: string; min: number; max: num
 
 /** Luke's rules and settings, the same for every video. Claude follows the
  *  rules in the rough cut and the sidebar, and can suggest new ones. */
-export function Style({ folder }: { folder: string }) {
+export function Style({ folder, onChange }: { folder: string; onChange?: (s: StyleData) => void }) {
   const [style, setStyle] = useState<StyleData | null>(null);
   const [draft, setDraft] = useState("");
   const [slider, setSlider] = useState<{ key: keyof StyleSettings; value: number } | null>(null);
@@ -30,6 +122,7 @@ export function Style({ folder }: { folder: string }) {
   const settings = { ...DEFAULTS, ...style.settings };
   const save = (next: StyleData) => {
     setStyle(next);
+    onChange?.(next);
     saveStyle(next).catch((e) => setError(String(e)));
   };
   const setRules = (next: typeof rules) => save({ ...style, rules: next });
@@ -138,6 +231,21 @@ export function Style({ folder }: { folder: string }) {
         })}
         <p className="hint">Used the next time you press Rough cut.</p>
       </div>
+      <div className="settings">
+        <div className="section-title">Motion graphics</div>
+        <label className="setting">
+          <span>How many Claude suggests</span>
+        </label>
+        <div className="seg wide">
+          {(["off", "light", "more"] as const).map((k) => (
+            <button key={k} className={(style.graphics ?? "light") === k ? "on" : ""} onClick={() => save({ ...style, graphics: k })}>
+              {{ off: "None", light: "A few", more: "More" }[k]}
+            </button>
+          ))}
+        </div>
+        <p className="hint">Used when you choose “Suggest graphics” in the Rough cut menu.</p>
+      </div>
+      <BrandSettings brand={style.brand ?? {}} onSave={(brand) => save({ ...style, brand })} />
       {error && <p className="error">{error}</p>}
     </div>
   );

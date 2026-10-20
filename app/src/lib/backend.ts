@@ -264,10 +264,24 @@ export interface StyleSettings {
   padOut?: number; // room kept after a word at a cut
 }
 
+/** Luke's look, applied to every motion graphic (unless he turns it off for one). */
+export interface Brand {
+  font?: string; // a font installed on the Mac, by name
+  bold?: number; // weight for headlines
+  regular?: number; // weight for everything else
+  ink?: string; // text colour
+  paper?: string; // background colour (cards, full-screen graphics)
+  accent?: string; // the colour that stands out
+  accent2?: string; // a second one, for charts
+  radius?: number; // corner roundness, pixels at 1080p
+}
+
 export interface Style {
   rules?: Rule[];
   settings?: StyleSettings;
   motion?: Partial<Record<TextStyle, Motion>>; // Luke's default motion for each kind of graphic
+  brand?: Brand;
+  graphics?: "off" | "light" | "more"; // how readily Claude suggests graphics
 }
 
 export interface Suggestion {
@@ -442,4 +456,47 @@ export async function setMotionDefault(style: TextStyle, motion: Motion): Promis
 export async function importImage(path: string): Promise<string> {
   if (!inApp) return path;
   return invoke<string>("import_image", { path });
+}
+
+// --- Motion graphics -----------------------------------------------------------
+
+export interface CatalogGraphic {
+  name: string;
+  title: string;
+  description: string;
+  group: string;
+  duration: number;
+  width: number;
+  height: number;
+  params: { key?: string; id?: string; label: string; type: string; default: string | number; min?: number; max?: number; step?: number }[];
+  poster?: string;
+}
+
+/** The motion graphics that ship with the app (from HyperFrames' catalogue). */
+export async function graphicsCatalog(): Promise<CatalogGraphic[]> {
+  if (!inApp) return fetch("/dev-catalog/catalog.json").then((r) => r.json()).then((c) => c.graphics);
+  return invoke("graphics_catalog");
+}
+
+/** Copies a catalogue graphic into the project; returns its folder name. */
+export async function addCatalogGraphic(folder: string, name: string): Promise<string> {
+  if (!inApp) return fetch(`/dev-graphics/add?name=${encodeURIComponent(name)}`).then((r) => r.text());
+  return invoke("add_catalog_graphic", { folder, name });
+}
+
+export async function graphicSource(folder: string, slug: string): Promise<string> {
+  if (!inApp) return fetch(`/dev-graphics/${slug}/source.html`).then((r) => r.text());
+  return invoke("graphic_source", { folder, slug });
+}
+
+/** Writes the graphic with Luke's settings applied, which plays and renders. */
+export async function saveGraphicView(folder: string, slug: string, html: string): Promise<void> {
+  if (!inApp) return void (await fetch(`/dev-graphics/view?slug=${encodeURIComponent(slug)}`, { method: "POST", body: html }));
+  return invoke("save_graphic_view", { folder, slug, html });
+}
+
+/** Where the viewer loads the project's graphics from. */
+export async function graphicsUrl(folder: string): Promise<string> {
+  if (!inApp) return "/dev-graphics";
+  return invoke("graphics_url", { folder });
 }

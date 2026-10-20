@@ -152,6 +152,7 @@ export interface Edits {
   captions?: Captions;
   clips?: Clip[];
   texts?: TextFx[];
+  graphics?: Graphic[];
   notes?: Note[];
   speeds?: SpeedFx[];
   blurs?: BlurFx[];
@@ -903,6 +904,65 @@ export function removeText(e: Edits, index: number): Edits {
   if (!t) return e;
   const texts = t.by === "agent" ? e.texts!.map((x, i) => (i === index ? { ...x, status: "restored" as const } : x)) : e.texts!.filter((_, i) => i !== index);
   return { ...e, texts, log: [...e.log, { at: now(), by: "you", op: "remove-text", note: t.text }] };
+}
+
+// --- Motion graphics ---------------------------------------------------------
+// HyperFrames compositions (animated HTML pages) from the catalogue or made
+// by Claude, kept in the project's graphics/<slug>/ folder and shown over the
+// video from start to end (source seconds), playing from its beginning.
+
+export interface Graphic {
+  slug: string; // its folder under graphics/
+  name: string; // what Luke sees, like "Clean bar"
+  from?: string; // the catalogue graphic it started as
+  start: number;
+  end: number;
+  x?: number; // moved by this fraction of the frame (0 is where it was made to sit)
+  y?: number;
+  scale?: number; // 1 is as made
+  params?: Record<string, string | number>; // its settings, as CSS custom properties
+  texts?: Record<string, string>; // its words, changed: the nth piece of text (in page order) -> new text
+  rev?: number; // bumped when Claude rewrites its page
+  brand?: boolean; // false: keep the graphic's own look rather than Luke's brand
+  by: "you" | "agent";
+  status?: AgentStatus;
+  reason?: string;
+}
+
+export function liveGraphics(e: Edits): Graphic[] {
+  return (e.graphics ?? []).filter((g) => g.status !== "restored");
+}
+
+/** Luke adds a graphic at source seconds start..end. */
+export function addGraphic(e: Edits, slug: string, name: string, start: number, end: number, from?: string): Edits {
+  const g: Graphic = { slug, name, ...(from ? { from } : {}), start, end, by: "you" };
+  return { ...e, graphics: [...(e.graphics ?? []), g], log: [...e.log, { at: now(), by: "you", op: "graphic", note: name }] };
+}
+
+/** Luke changes a graphic's settings, place or times. Claude's counts as kept once he does. */
+export function setGraphic(e: Edits, index: number, patch: Partial<Omit<Graphic, "by" | "slug">>): Edits {
+  const g = e.graphics?.[index];
+  if (!g) return e;
+  const next = { ...g, ...patch, status: g.by === "agent" ? ("accepted" as const) : g.status };
+  if (next.end - next.start < 0.1) return e;
+  if (JSON.stringify(next) === JSON.stringify(g)) return e;
+  const graphics = e.graphics!.map((x, i) => (i === index ? next : x));
+  return { ...e, graphics, log: [...e.log, { at: now(), by: "you", op: "edit-graphic", note: next.name }] };
+}
+
+export function setGraphicStatus(e: Edits, index: number, status: AgentStatus): Edits {
+  const g = e.graphics?.[index];
+  if (!g || g.status === status) return e;
+  const graphics = e.graphics!.map((x, i) => (i === index ? { ...x, status } : x));
+  return { ...e, graphics, log: [...e.log, { at: now(), by: "you", op: `${status}-graphic`, note: g.name }] };
+}
+
+/** Luke deletes a graphic. Claude's is kept as removed so it won't add it back. */
+export function removeGraphic(e: Edits, index: number): Edits {
+  const g = e.graphics?.[index];
+  if (!g) return e;
+  const graphics = g.by === "agent" ? e.graphics!.map((x, i) => (i === index ? { ...x, status: "restored" as const } : x)) : e.graphics!.filter((_, i) => i !== index);
+  return { ...e, graphics, log: [...e.log, { at: now(), by: "you", op: "remove-graphic", note: g.name }] };
 }
 
 // --- Notes -----------------------------------------------------------------

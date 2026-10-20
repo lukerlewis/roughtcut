@@ -5,6 +5,7 @@
 import type { Effect, FxItem, FxMode, FxTrack } from "../components/Timeline";
 import {
   removeClip,
+  removeGraphic,
   removeNote,
   removeTimed,
   setTimed,
@@ -13,6 +14,8 @@ import {
   removeZoom,
   setClipStatus,
   setClipTimes,
+  setGraphic,
+  setGraphicStatus,
   setText,
   setTextStatus,
   setZoomStatus,
@@ -54,6 +57,12 @@ export function effectTracks(e: Edits, words: Word[]): FxTrack[] {
       : [{ effect: { kind: "text", index }, start: t.start, end: t.end, label: `${TEXT_NAMES[t.style]}: ${t.text}`, pending: t.status === "pending", icon: t.style === "image" ? ("image" as const) : ("text" as const) }],
   );
   if (texts.length) tracks.push({ name: "Text", items: texts });
+  const graphics: FxItem[] = (e.graphics ?? []).flatMap((g, index) =>
+    g.status === "restored"
+      ? []
+      : [{ effect: { kind: "graphic", index }, start: g.start, end: g.end, label: g.name, pending: g.status === "pending", icon: "graphic" as const }],
+  );
+  if (graphics.length) tracks.push({ name: "Graphics", items: graphics });
   const speeds: FxItem[] = (e.speeds ?? []).flatMap((x, index) =>
     x.status === "restored"
       ? []
@@ -89,6 +98,8 @@ export function moveEffect(e: Edits, words: Word[], fx: Effect, start: number, e
     }
     case "text":
       return setText(e, fx.index, { start, end });
+    case "graphic":
+      return setGraphic(e, fx.index, { start, end });
     case "speed":
       return setTimed(e, "speeds", fx.index, { start, end });
     case "blur":
@@ -105,6 +116,8 @@ export function setEffectStatus(e: Edits, fx: Effect, status: AgentStatus): Edit
       return setClipStatus(e, fx.index, status);
     case "text":
       return setTextStatus(e, fx.index, status);
+    case "graphic":
+      return setGraphicStatus(e, fx.index, status);
     case "speed":
       return setTimedStatus(e, "speeds", fx.index, status);
     case "blur":
@@ -121,6 +134,8 @@ export function removeEffect(e: Edits, fx: Effect): Edits {
       return removeClip(e, fx.index);
     case "text":
       return removeText(e, fx.index);
+    case "graphic":
+      return removeGraphic(e, fx.index);
     case "note":
       return removeNote(e, fx.index);
     case "speed":
@@ -141,7 +156,12 @@ export function effectStart(e: Edits, words: Word[], fx: Effect): number | null 
     const n = e.notes?.[fx.index];
     return n ? n.at : null;
   }
-  const lists: Record<string, { start: number }[] | undefined> = { clip: e.clips, text: e.texts, speed: e.speeds, blur: e.blurs };
+  if (fx.kind === "graphic") {
+    // Far enough in that it has animated in.
+    const g = e.graphics?.[fx.index];
+    return g ? g.start + Math.min(1.5, (g.end - g.start) / 2) : null;
+  }
+  const lists: Record<string, { start: number }[] | undefined> = { clip: e.clips, text: e.texts, graphic: e.graphics, speed: e.speeds, blur: e.blurs };
   const list = lists[fx.kind];
   const item = list?.[fx.index];
   return item ? item.start + 0.05 : null;

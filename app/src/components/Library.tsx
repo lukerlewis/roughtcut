@@ -1,12 +1,14 @@
 import { EyeOff, ImageIcon, ImagePlus, Gauge, LayoutPanelLeft, MessageSquare, MousePointerClick, PanelBottom, Square, Type, User, X, ZoomIn } from "lucide-react";
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import type { CatalogGraphic } from "../lib/backend";
 import type { Motion, TextStyle } from "../lib/edl";
 
 /** Something Luke can drop on the timeline. */
 export type LibraryItem =
   | { kind: "text"; style: TextStyle }
   | { kind: "zoom" | "speed" | "blur" | "background" | "layout" | "note" }
-  | { kind: "asset"; id: string };
+  | { kind: "asset"; id: string }
+  | { kind: "graphic"; name: string }; // from the motion graphics catalogue
 
 export interface Asset {
   id: string;
@@ -57,8 +59,14 @@ export function Library(p: {
   onZoomToClicks: () => void;
   onAddImage: () => void;
   imageUrl: (src: string) => string | undefined; // for thumbnails
+  catalog: CatalogGraphic[];
 }) {
   const ghost = useRef<HTMLDivElement | null>(null);
+  const [find, setFind] = useState("");
+  const [open, setOpen] = useState<string | null>(null); // the catalogue group shown in full
+  const q = find.trim().toLowerCase();
+  const shown = p.catalog.filter((g) => !q || `${g.title} ${g.description} ${g.group}`.toLowerCase().includes(q));
+  const groups = [...new Set(shown.map((g) => g.group))];
 
   const start = (e: React.PointerEvent, item: LibraryItem, label: string) => {
     if (e.button !== 0) return;
@@ -117,6 +125,42 @@ export function Library(p: {
           <div className="tiles">{group.items.map((t) => tile(t.item, t.label, t.icon, t.key, t.needsParts && !p.recordedHere))}</div>
         </section>
       ))}
+      <section>
+        <div className="section-title">Motion graphics</div>
+        <input className="field find" placeholder="Find a graphic" value={find} onChange={(e) => setFind(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
+        {groups.map((group) => {
+          const all = shown.filter((g) => g.group === group);
+          const list = q || open === group ? all : all.slice(0, 4);
+          return (
+            <div key={group} className="graphic-group">
+              <div className="group-head">
+                <span>{group}</span>
+                {!q && all.length > 4 && (
+                  <button className="btn ghost" onClick={() => setOpen(open === group ? null : group)}>
+                    {open === group ? "Fewer" : `All ${all.length}`}
+                  </button>
+                )}
+              </div>
+              <div className="cards">
+                {list.map((g) => (
+                  <div
+                    key={g.name}
+                    className="card"
+                    title={`${g.description}\n\nDrag onto the timeline, or click to add at the playhead`}
+                    onPointerDown={(e) => start(e, { kind: "graphic", name: g.name }, g.title)}
+                  >
+                    <div className="poster">
+                      {g.poster ? <img src={g.poster} alt="" draggable={false} loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} /> : null}
+                    </div>
+                    <span className="label">{g.title}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        {!shown.length && <p className="hint">No graphic matches. Ask Claude to make one.</p>}
+      </section>
       <section>
         <div className="section-title">Your assets</div>
         {p.assets.length ? (
