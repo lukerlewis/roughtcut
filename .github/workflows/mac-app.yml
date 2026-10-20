@@ -64,8 +64,9 @@ jobs:
           ffprobe -v error -show_entries stream=codec_type,duration -of csv=p=0 "$RUNNER_TEMP/out.mp4" | tee "$RUNNER_TEMP/streams.txt"
           grep -q '^video,' "$RUNNER_TEMP/streams.txt" && grep -q '^audio,' "$RUNNER_TEMP/streams.txt"
           awk -F, '{ if ($2 < 0.9 || $2 > 1.1) exit 1 }' "$RUNNER_TEMP/streams.txt"
+      # Only the zipped app: the updater uses it, and making a disk image fails at random on GitHub's Macs.
       # The build number is the version's last part, so the app can tell when a newer build exists.
-      - run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg --config '{"version":"0.1.${{ github.run_number }}","bundle":{"macOS":{"files":{"MacOS/roughcut-matte":"../helpers/.build/apple/Products/Release/roughcut-matte","MacOS/roughcut-recorder":"../helpers/.build/apple/Products/Release/roughcut-recorder"}}}}'
+      - run: npx tauri build --target aarch64-apple-darwin --bundles app --config '{"version":"0.1.${{ github.run_number }}","bundle":{"macOS":{"files":{"MacOS/roughcut-matte":"../helpers/.build/apple/Products/Release/roughcut-matte","MacOS/roughcut-recorder":"../helpers/.build/apple/Products/Release/roughcut-recorder"}}}}'
       - name: Check the helpers are in the app
         run: |
           test -x $BUNDLE/macos/Roughcut.app/Contents/MacOS/roughcut-matte
@@ -86,12 +87,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "build-${{ github.run_number }}" \
-            $BUNDLE/macos/Roughcut.zip $BUNDLE/dmg/*.dmg \
+            $BUNDLE/macos/Roughcut.zip \
             --title "Build ${{ github.run_number }}" --notes "$(git log -1 --pretty=%s)" --target "$GITHUB_SHA"
       - uses: actions/upload-artifact@v4
         with:
           name: Roughcut-mac
           path: |
             app/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Roughcut.zip
-            app/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
           retention-days: 30
