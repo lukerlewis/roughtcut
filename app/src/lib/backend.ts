@@ -1,7 +1,8 @@
 // Talks to the Rust core. In a plain browser (vite dev, UI tests) it falls
 // back to fixtures under /fixtures so the UI can be worked on without the app.
 
-import type { CaptionStyle, Cue, Decisions, Edits, Segment, Word } from "./edl";
+import type { CaptionStrips } from "./captions";
+import type { Decisions, Edits, Segment, Word } from "./edl";
 
 export interface Opened {
   source: string;
@@ -93,7 +94,7 @@ export async function waveform(path: string, folder: string): Promise<Uint8Array
 export async function exportCut(
   source: string,
   segments: Segment[],
-  captions: { style: CaptionStyle; cues: Cue[] } | null,
+  captions: CaptionStrips | null,
   dest: string,
 ): Promise<void> {
   if (!inApp) {

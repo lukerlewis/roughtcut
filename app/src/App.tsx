@@ -5,6 +5,7 @@ import { Chat } from "./components/Chat";
 import { Timeline } from "./components/Timeline";
 import { Transcript, type Selection } from "./components/Transcript";
 import * as backend from "./lib/backend";
+import { captionStrips } from "./lib/captions";
 import {
   acceptAll,
   addZoom,
@@ -308,7 +309,7 @@ export default function App() {
     if (!dest) return;
     setExporting({ progress: 0, dest, done: false });
     try {
-      await backend.exportCut(project.source, segments(ranges, words, zooms), captions.on ? { style: captions.style, cues } : null, dest);
+      await backend.exportCut(project.source, segments(ranges, words, zooms), captions.on && cues.length ? captionStrips(cues, captions.style, project.info.width, project.info.height) : null, dest);
       setExporting({ progress: 1, dest, done: true });
     } catch (e) {
       setExporting({ progress: 0, dest, done: true, error: String(e) });

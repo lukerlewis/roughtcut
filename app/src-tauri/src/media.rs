@@ -102,24 +102,28 @@ pub struct Segment {
     pub zoom: Option<Zoom>,
 }
 
-/// One caption line while one of its words is being said, in cut seconds.
+/// One caption image and when it shows, in cut seconds. The editor draws
+/// each one (a strip across the bottom of the frame, as a base64 PNG) so the
+/// export matches its preview and needs no subtitle support in FFmpeg.
 #[derive(Deserialize)]
-pub struct Cue {
+pub struct CaptionFrame {
     pub start: f64,
     pub end: f64,
-    pub words: Vec<String>,
-    pub active: usize,
+    pub png: String,
 }
 
 #[derive(Deserialize)]
 pub struct Captions {
-    pub style: String, // "bold" or "clean"
-    pub cues: Vec<Cue>,
+    /// Where the strip's top edge sits, as a fraction of the frame height.
+    pub top: f64,
+    /// A clear strip, shown between captions.
+    pub blank: String,
+    pub frames: Vec<CaptionFrame>,
 }
 
 /// The filter graph that trims each piece, zooms it if asked, joins them and
-/// burns in the captions file if there is one.
-pub fn concat_graph(segments: &[Segment], width: u32, height: u32, captions: Option<&Path>) -> String {
+/// lays the caption strips (input 1) over the result if there are any.
+pub fn concat_graph(segments: &[Segment], width: u32, height: u32, captions_top: Option<f64>) -> String {
     let mut g = String::new();
     for (i, s) in segments.iter().enumerate() {
         let (a, b) = (s.start, s.end);
@@ -140,60 +144,59 @@ pub fn concat_graph(segments: &[Segment], width: u32, height: u32, captions: Opt
         g += &format!("[v{i}][a{i}]");
     }
     let n = segments.len();
-    match captions {
-        Some(file) => {
-            let f = file.to_string_lossy().replace('\\', "/").replace('\'', "");
-            g + &format!("concat=n={n}:v=1:a=1[vc][a];[vc]subtitles=filename='{f}'[v]")
-        }
+    match captions_top {
+        Some(top) => g + &format!(
+            "concat=n={n}:v=1:a=1[vc][a];[1:v]format=rgba[cap];[vc][cap]overlay=x=0:y=main_h*{top:.4}:eof_action=pass:format=auto[v]"
+        ),
         None => g + &format!("concat=n={n}:v=1:a=1[v][a]"),
     }
 }
 
-fn ass_time(t: f64) -> String {
-    let cs = (t.max(0.0) * 100.0).round() as u64;
-    format!("{}:{:02}:{:02}.{:02}", cs / 360000, cs / 6000 % 60, cs / 100 % 60, cs % 100)
+/// The FFmpeg concat list that shows each caption image for its time, with
+/// the blank strip filling the gaps. Files are named by `name(i)`, the blank
+/// one by `name(usize::MAX)`.
+pub fn caption_list(frames: &[CaptionFrame], total: f64, name: impl Fn(usize) -> String) -> String {
+    let mut s = String::from("ffconcat version 1.0\n");
+    let mut at = 0.0;
+    let mut add = |file: String, dur: f64| {
+        if dur > 0.0005 {
+            s += &format!("file '{file}'\nduration {dur:.4}\n");
+        }
+    };
+    for (i, f) in frames.iter().enumerate() {
+        let start = f.start.max(at);
+        add(name(usize::MAX), start - at);
+        let end = f.end.min(total).max(start);
+        add(name(i), end - start);
+        at = end;
+    }
+    add(name(usize::MAX), total - at + 1.0);
+    // The last entry is listed twice so its duration is honoured.
+    s += &format!("file '{}'\n", name(usize::MAX));
+    s
 }
 
-/// Captions as an ASS subtitle file sized to the video. Bold: big capitals
-/// with an outline and the spoken word in yellow. Clean: smaller sentence
-/// case on a soft dark box. The editor's preview draws the same two styles.
-pub fn ass(captions: &Captions, width: u32, height: u32) -> String {
-    let h = height as f64;
-    let margin = (width as f64 * 0.08).round();
-    let mut s = format!(
-        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n\
-         [V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, \
-         Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n\
-         Style: bold,Helvetica Neue,{},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,{},0,2,{margin},{margin},{},1\n\
-         Style: clean,Helvetica Neue,{},&H00FFFFFF,&H00FFFFFF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,3,{},0,2,{margin},{margin},{},1\n\n\
-         [Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
-        (h * 0.065).round(),
-        (h * 0.0055).max(1.0).round(),
-        (h * 0.12).round(),
-        (h * 0.045).round(),
-        (h * 0.012).max(1.0).round(),
-        (h * 0.07).round(),
-    );
-    let bold = captions.style != "clean";
-    for c in &captions.cues {
-        let words: Vec<String> = c
-            .words
-            .iter()
-            .enumerate()
-            .map(|(i, w)| {
-                let w = w.replace(['{', '}'], "").replace('\\', "/");
-                let w = if bold { w.to_uppercase() } else { w };
-                if bold && i == c.active {
-                    format!("{{\\c&H0AD6FF&}}{w}{{\\c&HFFFFFF&}}")
-                } else {
-                    w
-                }
-            })
-            .collect();
-        let style = if bold { "bold" } else { "clean" };
-        s += &format!("Dialogue: 0,{},{},{style},,0,0,0,,{}\n", ass_time(c.start), ass_time(c.end), words.join(" "));
+/// Decodes standard base64, ignoring anything that isn't part of it.
+fn base64(text: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0);
+    for c in text.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => continue,
+        };
+        acc = acc << 6 | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
     }
-    s
+    out
 }
 
 /// Renders the cut at full quality. Calls `progress` with 0..1 as it goes.
@@ -206,16 +209,12 @@ pub fn export(source: &Path, segments: &[Segment], captions: Option<&Captions>, 
     // A generous bitrate for the size: about 12 Mbit/s for 1080p30 and 50 for 4K30.
     let info = probe(source)?;
     let bitrate = ((info.width as f64 * info.height as f64 * info.fps * 0.2) as u64).max(4_000_000).to_string();
-    let subs = match captions {
-        Some(c) if !c.cues.is_empty() => {
-            let file = std::env::temp_dir().join(format!("roughcut-captions-{}.ass", std::process::id()));
-            fs::write(&file, ass(c, info.width, info.height)).map_err(|e| format!("Couldn't write the captions: {e}"))?;
-            Some(file)
-        }
+    let total: f64 = segments.iter().map(|s| s.end - s.start).sum();
+    let caps = match captions {
+        Some(c) if !c.frames.is_empty() => Some(write_captions(c, total).map_err(|e| format!("Couldn't write the captions: {e}"))?),
         _ => None,
     };
-    let graph = concat_graph(segments, info.width, info.height, subs.as_deref());
-    let total: f64 = segments.iter().map(|s| s.end - s.start).sum();
+    let graph = concat_graph(segments, info.width, info.height, captions.filter(|_| caps.is_some()).map(|c| c.top));
     let mut encoders: Vec<Vec<&str>> = Vec::new();
     if cfg!(target_os = "macos") {
         encoders.push(vec!["-c:v", "h264_videotoolbox", "-b:v", &bitrate]);
@@ -223,13 +222,13 @@ pub fn export(source: &Path, segments: &[Segment], captions: Option<&Captions>, 
     encoders.push(vec!["-c:v", "libx264", "-preset", "medium", "-crf", "18"]);
     let mut result = Err(String::new());
     for video in &encoders {
-        result = encode(source, &graph, total, dest, video, &progress);
+        result = encode(source, caps.as_ref().map(|d| d.join("list.ffconcat")).as_deref(), &graph, total, dest, video, &progress);
         if result.is_ok() {
             break;
         }
     }
-    if let Some(f) = subs {
-        let _ = fs::remove_file(f);
+    if let Some(d) = caps {
+        let _ = fs::remove_dir_all(d);
     }
     match result {
         Ok(()) => {
@@ -243,10 +242,27 @@ pub fn export(source: &Path, segments: &[Segment], captions: Option<&Captions>, 
     }
 }
 
-fn encode(source: &Path, graph: &str, total: f64, dest: &Path, video: &[&str], progress: &impl Fn(f64)) -> Result<(), String> {
-    let mut child = tools::command(tools::ffmpeg())
-        .args(["-v", "error", "-y", "-i"])
-        .arg(source)
+/// Writes the caption images and their concat list to a temporary folder.
+fn write_captions(c: &Captions, total: f64) -> std::io::Result<std::path::PathBuf> {
+    let dir = std::env::temp_dir().join(format!("roughcut-captions-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir)?;
+    let name = |i: usize| if i == usize::MAX { "blank.png".to_string() } else { format!("c{i}.png") };
+    fs::write(dir.join(name(usize::MAX)), base64(&c.blank))?;
+    for (i, f) in c.frames.iter().enumerate() {
+        fs::write(dir.join(name(i)), base64(&f.png))?;
+    }
+    fs::write(dir.join("list.ffconcat"), caption_list(&c.frames, total, name))?;
+    Ok(dir)
+}
+
+fn encode(source: &Path, captions: Option<&Path>, graph: &str, total: f64, dest: &Path, video: &[&str], progress: &impl Fn(f64)) -> Result<(), String> {
+    let mut cmd = tools::command(tools::ffmpeg());
+    cmd.args(["-v", "error", "-y", "-i"]).arg(source);
+    if let Some(list) = captions {
+        cmd.args(["-f", "concat", "-safe", "0", "-i"]).arg(list);
+    }
+    let mut child = cmd
         .arg("-filter_complex")
         .arg(graph)
         .args(["-map", "[v]", "-map", "[a]"])
@@ -289,19 +305,22 @@ mod tests {
         assert!(g.contains("crop=w=iw/1.5:h=ih/1.5:x=(iw-iw/1.5)*0.5:y=(ih-ih/1.5)*0.4,scale=1920:1080"));
         assert!(g.contains("[0:a]atrim=4.0000:6.0000"));
         assert!(g.ends_with("[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"));
-        let g = concat_graph(&segs, 1920, 1080, Some(Path::new("/tmp/c.ass")));
-        assert!(g.ends_with("concat=n=2:v=1:a=1[vc][a];[vc]subtitles=filename='/tmp/c.ass'[v]"));
+        let g = concat_graph(&segs, 1920, 1080, Some(0.6));
+        assert!(g.ends_with("concat=n=2:v=1:a=1[vc][a];[1:v]format=rgba[cap];[vc][cap]overlay=x=0:y=main_h*0.6000:eof_action=pass:format=auto[v]"));
     }
 
     #[test]
-    fn captions_file() {
-        let c = Captions {
-            style: "bold".into(),
-            cues: vec![Cue { start: 61.5, end: 62.25, words: vec!["Most".into(), "{people}".into()], active: 1 }],
-        };
-        let a = ass(&c, 1920, 1080);
-        assert!(a.contains("PlayResY: 1080"));
-        assert!(a.contains("Dialogue: 0,0:01:01.50,0:01:02.25,bold,,0,0,0,,MOST {\\c&H0AD6FF&}PEOPLE{\\c&HFFFFFF&}"), "{a}");
+    fn captions_list_and_base64() {
+        let f = |start, end| CaptionFrame { start, end, png: String::new() };
+        let name = |i: usize| if i == usize::MAX { "b".to_string() } else { format!("c{i}") };
+        let l = caption_list(&[f(0.0, 1.0), f(1.0, 1.5), f(2.0, 2.5)], 3.0, name);
+        assert_eq!(
+            l,
+            "ffconcat version 1.0\nfile 'c0'\nduration 1.0000\nfile 'c1'\nduration 0.5000\nfile 'b'\nduration 0.5000\n\
+             file 'c2'\nduration 0.5000\nfile 'b'\nduration 1.5000\nfile 'b'\n"
+        );
+        assert_eq!(base64("aGVsbG8h\n"), b"hello!");
+        assert_eq!(base64("aGk="), b"hi");
     }
 
     #[test]
@@ -324,9 +343,12 @@ mod tests {
             Segment { start: 0.5, end: 2.0, zoom: None },
             Segment { start: 3.0, end: 4.5, zoom: Some(Zoom { scale: 1.4, x: 0.5, y: 0.4 }) },
         ];
+        // A one-pixel PNG stands in for the editor's caption strips.
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
         let captions = Captions {
-            style: "bold".into(),
-            cues: vec![Cue { start: 0.2, end: 1.0, words: vec!["Hello".into(), "there".into()], active: 0 }],
+            top: 0.6,
+            blank: png.into(),
+            frames: vec![CaptionFrame { start: 0.2, end: 1.0, png: png.into() }, CaptionFrame { start: 1.5, end: 2.0, png: png.into() }],
         };
         export(&src, &segs, Some(&captions), &dest, |p| seen.set(p)).unwrap();
         let got = probe(&dest).unwrap();
