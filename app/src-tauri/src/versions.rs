@@ -22,7 +22,7 @@ pub fn list(folder: &Path) -> Vec<Value> {
             Some(json!({ "id": id, "name": v["name"], "at": v["at"], "by": v["by"], "length": v["length"], "note": v["note"] }))
         })
         .collect();
-    out.sort_by(|a, b| a["at"].as_str().cmp(&b["at"].as_str()));
+    out.sort_by(|a, b| (a["at"].as_str(), a["id"].as_str()).cmp(&(b["at"].as_str(), b["id"].as_str())));
     out
 }
 
@@ -88,7 +88,7 @@ mod tests {
         save(&folder, "Tighter", &json!({ "agent": [2] }), 50.0, "you", Some("shorter intro")).unwrap();
         assert_eq!(a, "claude-cut");
         assert_eq!(list(&folder).len(), 2);
-        assert_eq!(list(&folder)[0]["length"], 61.23);
+        assert_eq!(list(&folder).iter().find(|v| v["id"] == "claude-cut").unwrap()["length"], 61.23);
         assert_eq!(load(&folder, "tighter").unwrap()["agent"][0], 2);
         // Same name replaces it.
         save(&folder, "claude cut", &json!({ "agent": [3] }), 60.0, "you", None).unwrap();
