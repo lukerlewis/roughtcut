@@ -65,6 +65,7 @@ export function Updates() {
 
   return (
     <>
+      {state && state.current > 0 && <span className="sub mono" title="Roughcut's build number">build {state.current}</span>}
       {button}
       {sheet && (
         <div className="sheet" onKeyDown={(e) => e.stopPropagation()}>
