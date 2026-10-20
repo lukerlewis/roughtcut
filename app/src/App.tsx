@@ -1,4 +1,4 @@
-import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Scissors, SkipBack } from "lucide-react";
+import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Scissors, SkipBack, Type } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
@@ -9,8 +9,11 @@ import { Updates } from "./components/Updates";
 import * as backend from "./lib/backend";
 import { alignWords } from "./lib/align";
 import { captionStrips } from "./lib/captions";
+import { effectStart, effectTracks, moveEffect, removeEffect, setEffectStatus } from "./lib/effects";
+import { drawAt, graphicsLayer, type Placed } from "./lib/graphics";
 import {
   acceptAll,
+  addText,
   addZoom,
   agentCutAt,
   applyRoughCut,
@@ -21,25 +24,22 @@ import {
   cutDuration,
   cutSpan,
   cutWords,
-  deleteClip,
   editRanges,
   fromDecisions,
   liveClips,
   liveZooms,
   PARAMS,
   pendingCount,
-  removeClip,
-  removeZoom,
   removeZooms,
   restoreWords,
   segments,
   setAgentStatus,
   setCaptions,
-  setClipStatus,
-  setClipTimes,
+  setText,
+  sourceToCut,
+  cutToSource,
   setZoomLook,
   setZoomStatus,
-  setZoomTimes,
   shownKinds,
   timecode,
   trimClip,
@@ -47,7 +47,6 @@ import {
   zoomAt,
   zoomBox,
   zoomPointFor,
-  zoomSpan,
   type CaptionStyle,
   type Edits,
   type Word,
@@ -289,6 +288,8 @@ export default function App() {
   const showingRemoved = current >= 0 && kinds[current] !== null && words[current].end > state.source;
   const picked = effect?.kind === "zoom" ? edits?.zooms?.[effect.index] : undefined;
   const pickedClip = effect?.kind === "clip" ? edits?.clips?.[effect.index] : undefined;
+  const pickedText = effect?.kind === "text" ? edits?.texts?.[effect.index] : undefined;
+  const pickedAny = picked || pickedClip || pickedText;
   // While a zoom's settings are open the video shows whole, with the zoom as a box to drag.
   const zoom = picked ? null : zoomAt(words, zooms, state.source);
   const box = picked ? zoomBox(look ?? picked) : null;
@@ -323,10 +324,75 @@ export default function App() {
     if (!next || !edits) return;
     setTab("effect");
     player.current?.pause();
-    const z = next.kind === "zoom" ? edits.zooms?.[next.index] : undefined;
-    const c = next.kind === "clip" ? edits.clips?.[next.index] : undefined;
-    if (z) player.current?.seekSource(zoomSpan(words, z)[0] + 0.05);
-    if (c) player.current?.seekSource(c.start + 0.05);
+    const at = effectStart(edits, words, next);
+    // Only jump if the playhead isn't already inside it.
+    const item = effectTracks(edits, words).flatMap((t) => t.items).find((i) => i.effect.kind === next.kind && i.effect.index === next.index);
+    if (at !== null && !(item && state.source >= item.start && state.source <= item.end)) player.current?.seekSource(at);
+  };
+
+  // Text: drawn over the video, and dragged there to move it while its settings are open.
+  const [textDraft, setTextDraft] = useState<{ index: number; x: number; y: number } | null>(null);
+  const placed: Placed[] = useMemo(
+    () =>
+      (edits?.texts ?? []).flatMap((t, i) => {
+        if (t.status === "restored") return [];
+        const shown = textDraft && textDraft.index === i ? { ...t, x: textDraft.x, y: textDraft.y } : t;
+        const [a, b] = [sourceToCut(ranges, t.start), sourceToCut(ranges, t.end)];
+        const full = effect?.kind === "text" && effect.index === i;
+        return b - a > 0.05 ? [{ t: shown, start: a, end: b, full }] : [];
+      }),
+    [edits, ranges, textDraft, effect],
+  );
+  const gfx = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = gfx.current;
+    if (!c) return;
+    const w = c.clientWidth * (window.devicePixelRatio || 1);
+    const h = c.clientHeight * (window.devicePixelRatio || 1);
+    if (c.width !== Math.round(w) || c.height !== Math.round(h)) [c.width, c.height] = [Math.round(w), Math.round(h)];
+    const g = c.getContext("2d")!;
+    g.clearRect(0, 0, c.width, c.height);
+    drawAt(g, placed, state.time, c.width, c.height);
+  });
+  const dragText = (e: React.PointerEvent) => {
+    if (!pickedText || !effect || !frameRef.current) return;
+    e.preventDefault();
+    const rect = frameRef.current.getBoundingClientRect();
+    const [x0, y0, sx, sy, index] = [e.clientX, e.clientY, pickedText.x, pickedText.y, effect.index];
+    let last: { index: number; x: number; y: number } | null = null;
+    const move = (m: PointerEvent) => {
+      last = {
+        index,
+        x: Math.min(1, Math.max(0, sx + (m.clientX - x0) / rect.width)),
+        y: Math.min(1, Math.max(0, sy + (m.clientY - y0) / rect.height)),
+      };
+      setTextDraft(last);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (last) change((x) => setText(x, index, { x: last!.x, y: last!.y }));
+      setTextDraft(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  /** Adds text over the selected words, or for three seconds from the playhead, and opens its settings. */
+  const newText = () => {
+    if (!edits || !project) return;
+    player.current?.pause();
+    // Work in the cut, so a title never lands on words that don't play.
+    let a = selection ? sourceToCut(ranges, words[selection.first].start) : state.time;
+    let b = selection ? sourceToCut(ranges, words[selection.last].end) : a + 3;
+    if (b - a < 0.5) [a, b] = [state.time, state.time + 3];
+    const length = sourceToCut(ranges, project.info.duration);
+    if (b > length) [a, b] = [Math.max(0, length - 3), length];
+    const [start, end] = [cutToSource(ranges, a).source, cutToSource(ranges, b).source];
+    const index = edits.texts?.length ?? 0;
+    change((x) => addText(x, "title", "Your title", start, end));
+    setSelection(null);
+    setTimeout(() => pickEffect({ kind: "text", index }), 0);
   };
   const clip = clipAt(clips, state.source);
   const clipVideo = useRef<HTMLVideoElement>(null);
@@ -386,13 +452,15 @@ export default function App() {
       } else if ((e.key === "Backspace" || e.key === "Delete") && effect && !selection) {
         e.preventDefault();
         const picked = effect;
-        change((x) => (picked.kind === "zoom" ? removeZoom(x, picked.index) : removeClip(x, picked.index)));
+        change((x) => removeEffect(x, picked));
         pickEffect(null);
-        setTab("changes");
       } else if ((e.key === "Backspace" || e.key === "Delete") && selection) {
         e.preventDefault();
         change((x) => cutWords(clearWordTrims(x, selection.first, selection.last), selection.first, selection.last));
         setSelection(null);
+      } else if (!mod && e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        newText();
       } else if (!mod && e.key.toLowerCase() === "z" && selection) {
         e.preventDefault();
         toggleZoom(selection.first, selection.last);
@@ -425,7 +493,11 @@ export default function App() {
     if (!dest) return;
     setExporting({ progress: 0, dest, done: false });
     try {
-      await backend.exportCut(project.source, segments(ranges, words, zooms, clips, project.folder), captions.on && cues.length ? captionStrips(cues, captions.style, project.info.width, project.info.height) : null, dest);
+      const layers = [
+        captions.on && cues.length ? captionStrips(cues, captions.style, project.info.width, project.info.height) : null,
+        await graphicsLayer(placed.map((p) => ({ ...p, full: false })), project.info.width, project.info.height, project.info.fps),
+      ].filter((l) => l !== null);
+      await backend.exportCut(project.source, segments(ranges, words, zooms, clips, project.folder), layers, dest);
       setExporting({ progress: 1, dest, done: true });
     } catch (e) {
       setExporting({ progress: 0, dest, done: true, error: String(e) });
@@ -470,6 +542,7 @@ export default function App() {
   }
 
   const pending = pendingCount(edits);
+  const tracks = effectTracks(edits, words);
   const saved = project.info.duration - cutDuration(ranges);
 
   return (
@@ -484,6 +557,9 @@ export default function App() {
         <Updates />
         <button className="btn ghost" onClick={roughCut} disabled={!!cutting} title="Claude suggests cuts (fillers, retakes, long pauses) for you to review">
           <Scissors size={16} /> Rough cut
+        </button>
+        <button className="btn ghost" onClick={newText} title="Add a title over the selected words or at the playhead (T)">
+          <Type size={16} /> Text
         </button>
         <div className="seg" title="Captions">
           <button className={!captions.on ? "on" : ""} onClick={() => change((x) => setCaptions(x, { ...captions, on: false }))}>
@@ -545,6 +621,12 @@ export default function App() {
                 <video ref={videoB} src={project.url} />
                 {clip && clipUrls[clip.file] && <video ref={clipVideo} className="clip" src={clipUrls[clip.file]} playsInline />}
               </div>
+              <canvas
+                ref={gfx}
+                className={`graphics ${pickedText ? "editing" : ""}`}
+                onPointerDown={dragText}
+                title={pickedText ? "Drag to move the text" : undefined}
+              />
               {box && (
                 <svg className="zoomdim" viewBox="0 0 1 1" preserveAspectRatio="none">
                   <path
@@ -597,7 +679,7 @@ export default function App() {
             <button className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}>
               Ask Claude {asking && <span className="pulse" />}
             </button>
-            {(picked || pickedClip) && (
+            {pickedAny && (
               <button className={tab === "effect" ? "on" : ""} onClick={() => setTab("effect")}>
                 Effect
               </button>
@@ -609,22 +691,24 @@ export default function App() {
               </button>
             )}
           </div>
-          {tab === "effect" && (picked || pickedClip) ? (
+          {tab === "effect" && pickedAny ? (
             <Effect
+              key={effect ? `${effect.kind}:${effect.index}` : ""}
               words={words}
               zoom={picked}
               clip={pickedClip}
+              text={pickedText}
+              onText={(patch) => effect && change((x) => setText(x, effect.index, patch))}
               look={look}
               onLook={setLook}
               onCommit={(l) => {
                 if (effect) change((x) => setZoomLook(x, effect.index, l));
                 setLook(null);
               }}
-              onKeep={() => effect && change((x) => (effect.kind === "zoom" ? setZoomStatus(x, effect.index, "accepted") : setClipStatus(x, effect.index, "accepted")))}
+              onKeep={() => effect && change((x) => setEffectStatus(x, effect, "accepted"))}
               onRemove={() => {
-                if (effect) change((x) => (effect.kind === "zoom" ? removeZoom(x, effect.index) : removeClip(x, effect.index)));
+                if (effect) change((x) => removeEffect(x, effect));
                 pickEffect(null);
-                setTab("changes");
               }}
             />
           ) : tab === "changes" || tab === "effect" ? (
@@ -651,11 +735,9 @@ export default function App() {
               onZoomRemove={(i) => change((x) => setZoomStatus(x, i, "restored"))}
               onZoomUndo={(i) => change((x) => setZoomStatus(x, i, "pending"))}
               clips={edits.clips ?? []}
-              onClipFocus={(i) => {
-                player.current?.pause();
-                player.current?.seekSource(edits.clips![i].start);
-              }}
-              onClipStatus={(i, status) => change((x) => setClipStatus(x, i, status))}
+              texts={edits.texts ?? []}
+              onEffectFocus={(kind, index) => pickEffect({ kind, index })}
+              onEffectStatus={(kind, index, status) => change((x) => setEffectStatus(x, { kind, index }, status))}
             />
           ) : (
             <Chat
@@ -682,15 +764,13 @@ export default function App() {
         claudeJoins={claudeJoins}
         fps={project.info.fps}
         words={words}
-        zooms={edits.zooms ?? []}
-        onZoomEdit={(i, start, end) => change((x) => setZoomTimes(x, words, i, start, end))}
-        clips={edits.clips ?? []}
-        onClipEdit={(i, start, end, offset) => change((x) => setClipTimes(x, i, start, end, offset))}
-        onClipRemove={(i) => change((x) => removeClip(x, i))}
+        tracks={tracks}
+        onFxEdit={(fx, start, end, mode) => change((x) => moveEffect(x, words, fx, start, end, mode))}
+        pins={[]}
+        onPin={() => undefined}
         effect={effect}
         onSelectEffect={pickEffect}
         onTrim={(i, start, end) => change((x) => trimClip(x, ranges, i, start, end))}
-        onDeleteClip={(i) => change((x) => deleteClip(x, ranges, i))}
         selection={selection}
         onSelectWords={(first, last) => setSelection({ first, last })}
         onCutPause={(start, end) => change((x) => cutSpan(x, start, end))}

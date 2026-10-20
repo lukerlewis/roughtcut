@@ -1,4 +1,4 @@
-import { ArrowUp, BookOpen, Captions, Film, RotateCcw, Scissors, Square, Terminal, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowUp, BookOpen, Captions, Film, RotateCcw, Scissors, Square, Terminal, Type, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../lib/backend";
 import { timecode, type Word } from "../lib/edl";
@@ -39,6 +39,21 @@ function Action({ m, words, onSeekWord }: { m: ChatMessage; words: Word[]; onSee
     return (
       <div className="action quiet">
         <Film size={13} /> Took out its clip at {timecode(Number(m.input?.start) || 0)}
+      </div>
+    );
+  if (m.tool === "add_text")
+    return (
+      <div className="action" onClick={() => Number.isInteger(from) && onSeekWord(from)}>
+        <Type size={13} />
+        <span className="what">
+          Added text "{String(m.input?.text ?? "")}" <span className="why">· {m.input?.reason ?? ""}</span>
+        </span>
+      </div>
+    );
+  if (m.tool === "remove_text")
+    return (
+      <div className="action quiet">
+        <Type size={13} /> Took its text off {span ? `"${span}"` : ""}
       </div>
     );
   if (m.tool === "Bash" || m.tool === "Write" || m.tool === "Read") {

@@ -1,8 +1,36 @@
 import { Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { blocks as wordBlocks, cutDuration, cutToSource, sourceToCut, timecode, zoomSpan, type Block, type Clip, type Word, type Zoom } from "../lib/edl";
+import { blocks as wordBlocks, cutDuration, cutToSource, sourceToCut, timecode, type Block, type Word } from "../lib/edl";
 
-export type Effect = { kind: "zoom" | "clip"; index: number };
+/** An effect on the timeline, by kind and its index in that kind's list. */
+export type Effect = { kind: string; index: number };
+
+/** One block on an effect track, in source seconds. */
+export interface FxItem {
+  effect: Effect;
+  start: number;
+  end: number;
+  label: string;
+  pending: boolean; // Claude's and unreviewed: drawn blue
+  icon?: "film" | "text" | "zoom" | "blur" | "speed" | "layout" | "audio";
+  /** How far its ends can go (e.g. a clip can't run past its file). */
+  bounds?: [number, number];
+}
+
+export interface FxTrack {
+  name: string;
+  items: FxItem[];
+}
+
+/** A note pinned to a moment, shown as a flag on the ruler. */
+export interface Pin {
+  index: number;
+  at: number; // source seconds
+  done: boolean;
+  forClaude: boolean;
+}
+
+export type FxMode = "left" | "right" | "move";
 
 interface Props {
   ranges: [number, number][];
@@ -13,14 +41,12 @@ interface Props {
   claudeJoins: number[]; // indexes of joins where Claude's unreviewed cut sits
   fps: number;
   words: Word[];
-  zooms: Zoom[]; // all of them; removed ones are skipped
-  onZoomEdit: (index: number, start: number, end: number) => void; // source seconds
-  clips: Clip[]; // Claude's clips, all of them; removed ones are skipped
-  onClipEdit: (index: number, start: number, end: number, offset: number) => void; // source seconds
-  onClipRemove: (index: number) => void;
+  tracks: FxTrack[]; // effect tracks, top to bottom, above the recording
+  onFxEdit: (effect: Effect, start: number, end: number, mode: FxMode) => void; // source seconds
+  pins: Pin[];
+  onPin: (index: number) => void;
   onTrim: (clip: number, start: number, end: number) => void; // source seconds
-  onDeleteClip: (clip: number) => void;
-  effect: Effect | null; // the zoom or clip whose settings are showing
+  effect: Effect | null; // the effect whose settings are showing
   onSelectEffect: (effect: Effect | null) => void;
   selection: { first: number; last: number } | null; // words selected (shared with the transcript)
   onSelectWords: (first: number, last: number) => void; // ⌫ then cuts them, Z zooms
@@ -30,31 +56,21 @@ interface Props {
 }
 
 const RULER = 22;
-const TRACK_H = 18; // Claude's clips and the zooms each get a track this tall above the recording
-const CLIP_GAP = 26; // the Claude clips track, shown only when there are clips
+const TRACK_TOP = 28;
+const TRACK_H = 18; // each effect track
+const TRACK_GAP = 26; // from one track's top to the next
 const LANE_H = 100;
 const EDGE = 6; // px from an end that grabs it
-const MIN = 0.1; // shortest clip or zoom, in seconds
+const MIN = 0.1; // shortest effect, in seconds
 
 type Drag =
   | { mode: "scrub" }
-  | { mode: "zoom-left" | "zoom-right" | "zoom-move"; index: number; a: number; b: number; x: number; span: [number, number] }
-  | { mode: "made-left" | "made-right" | "made-move"; index: number; a: number; b: number; x: number }
+  | { mode: "fx"; edge: FxMode; item: FxItem; a: number; b: number; x: number }
   | { mode: "trim-left" | "trim-right"; clip: number; a: number; b: number; x: number };
 
-type Preview =
-  | { kind: "zoom" | "made"; index: number; a: number; b: number }
-  | { kind: "trim"; clip: number; a: number; b: number };
+type Preview = { kind: "fx"; key: string; a: number; b: number } | { kind: "trim"; clip: number; a: number; b: number };
 
-
-/** A small strip of film, marking a clip Claude made. */
-function film(g: CanvasRenderingContext2D, x: number, y: number) {
-  g.fillRect(x, y, 10, 1.5);
-  g.fillRect(x, y + 8.5, 10, 1.5);
-  g.fillRect(x, y, 1.5, 10);
-  g.fillRect(x + 8.5, y, 1.5, 10);
-  g.fillRect(x + 3, y + 3, 4, 4);
-}
+const keyOf = (e: Effect) => `${e.kind}:${e.index}`;
 
 function css(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -74,6 +90,54 @@ function label(t: number, step: number) {
   return `${timecode(t)}.${String(Math.round((t % 1) * 10 ** digits) % 10 ** digits).padStart(digits, "0")}`;
 }
 
+/** Small glyphs that say what kind of effect a block is. */
+function glyph(g: CanvasRenderingContext2D, icon: FxItem["icon"], x: number, y: number) {
+  switch (icon) {
+    case "film":
+      g.fillRect(x, y, 10, 1.5);
+      g.fillRect(x, y + 8.5, 10, 1.5);
+      g.fillRect(x, y, 1.5, 10);
+      g.fillRect(x + 8.5, y, 1.5, 10);
+      g.fillRect(x + 3, y + 3, 4, 4);
+      break;
+    case "text":
+      g.fillRect(x, y, 10, 2);
+      g.fillRect(x + 4, y, 2, 10);
+      break;
+    case "blur":
+      for (const [dx, dy] of [[1, 1], [6, 1], [1, 6], [6, 6]]) g.fillRect(x + dx, y + dy, 3, 3);
+      break;
+    case "speed":
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x + 5, y + 5);
+      g.lineTo(x, y + 10);
+      g.moveTo(x + 5, y);
+      g.lineTo(x + 10, y + 5);
+      g.lineTo(x + 5, y + 10);
+      g.fill();
+      break;
+    case "layout":
+      g.fillRect(x, y, 10, 1.5);
+      g.fillRect(x, y + 8.5, 10, 1.5);
+      g.fillRect(x, y, 1.5, 10);
+      g.fillRect(x + 8.5, y, 1.5, 10);
+      g.fillRect(x + 5, y + 4, 4, 4);
+      break;
+    case "audio":
+      for (const [dx, hh] of [[0, 4], [3, 10], [6, 6], [9, 8]]) g.fillRect(x + dx, y + (10 - hh) / 2, 1.5, hh);
+      break;
+    default:
+      // zoom: a magnifier ring
+      g.beginPath();
+      g.arc(x + 4, y + 4, 3.5, 0, Math.PI * 2);
+      g.lineWidth = 1.5;
+      g.strokeStyle = g.fillStyle as string;
+      g.stroke();
+      g.fillRect(x + 6.5, y + 6.5, 3, 3);
+  }
+}
+
 export function Timeline(p: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [zoom, setZoom] = useState(0); // 0 = fit the whole cut
@@ -86,33 +150,29 @@ export function Timeline(p: Props) {
     previewRef.current = v;
     setPreviewState(v);
   };
-  const selected = p.effect;
   const [pause, setPause] = useState<Block | null>(null); // a pause block picked to delete
-  const hasClips = p.clips.some((c) => c.status !== "restored");
-  const CLIP_TOP = 28;
-  const ZOOM_TOP = 28 + (hasClips ? CLIP_GAP : 0);
-  const LANE_TOP = ZOOM_TOP + 24;
+  const LANE_TOP = TRACK_TOP + p.tracks.length * TRACK_GAP;
 
-  // The clips as they'd be with the trim in progress.
+  // The pieces as they'd be with the trim in progress.
   const ranges =
     preview?.kind === "trim" ? p.ranges.map((r, i) => (i === preview.clip ? ([preview.a, preview.b] as [number, number]) : r)) : p.ranges;
   const total = cutDuration(ranges);
   const lanes = useMemo(() => wordBlocks(ranges, p.words), [ranges, p.words]);
 
-  // Each live zoom as a block in cut time, with the drag in progress applied.
-  const blocks = p.zooms.flatMap((z, index) => {
-    if (z.status === "restored") return [];
-    if (preview?.kind === "zoom" && preview.index === index) return [{ index, z, a: preview.a, b: preview.b }];
-    const [a, b] = zoomSpan(p.words, z);
-    return [{ index, z, a: sourceToCut(ranges, a), b: sourceToCut(ranges, b) }];
-  });
-
-  // Each of Claude's live clips as a block in cut time.
-  const made = p.clips.flatMap((c, index) => {
-    if (c.status === "restored") return [];
-    if (preview?.kind === "made" && preview.index === index) return [{ index, c, a: preview.a, b: preview.b }];
-    return [{ index, c, a: sourceToCut(ranges, c.start), b: sourceToCut(ranges, c.end) }];
-  });
+  // Every effect as a block in cut time, with the drag in progress applied.
+  const fx = p.tracks.flatMap((track, t) =>
+    track.items.map((item) => {
+      const key = keyOf(item.effect);
+      const moving = preview?.kind === "fx" && preview.key === key;
+      return {
+        item,
+        key,
+        top: TRACK_TOP + t * TRACK_GAP,
+        a: moving ? preview.a : sourceToCut(ranges, item.start),
+        b: moving ? preview.b : sourceToCut(ranges, item.end),
+      };
+    }),
+  );
 
   const pxPerSec = useCallback(
     (width: number) => {
@@ -197,11 +257,14 @@ export function Timeline(p: Props) {
       acc += b - a;
       if (x1 < 0 || x0 > w) return;
       const at = (t: number) => x(start + (t - a));
-      for (const bl of lanes[i] ?? []) {
+      const span = (bl: Block) => {
         const bx0 = at(bl.start);
         const bx1 = bl.end >= b - 1e-6 ? x1 - 2 : at(bl.end) - 1;
+        return [bx0, bx1, Math.max(1, bx1 - bx0)] as const;
+      };
+      for (const bl of lanes[i] ?? []) {
+        const [bx0, bx1, bw] = span(bl);
         if (bx1 < 0 || bx0 > w) continue;
-        const bw = Math.max(1, bx1 - bx0);
         g.globalAlpha = bl.word === null ? 0.55 : 1;
         g.fillStyle = clipFill;
         g.beginPath();
@@ -223,10 +286,8 @@ export function Timeline(p: Props) {
         }
       }
       for (const bl of lanes[i] ?? []) {
-        const bx0 = at(bl.start);
-        const bx1 = bl.end >= b - 1e-6 ? x1 - 2 : at(bl.end) - 1;
+        const [bx0, bx1, bw] = span(bl);
         if (bx1 < 0 || bx0 > w) continue;
-        const bw = Math.max(1, bx1 - bx0);
         // The word, where there's room for it.
         if (bl.word !== null && bw > 14) {
           g.save();
@@ -267,57 +328,45 @@ export function Timeline(p: Props) {
       }
     });
 
-    // Effects track: zooms as blocks, blue while Claude's and unreviewed.
-    g.font = `500 10px ${mono}`;
-    for (const { index, z, a, b } of blocks) {
-      const x0 = x(a);
-      const x1 = x(b);
-      if (x1 < 0 || x0 > w) continue;
-      const pending = z.status === "pending";
-      g.fillStyle = pending ? css("--unread") : css("--stroke-strong");
-      g.beginPath();
-      g.roundRect(x0, ZOOM_TOP, Math.max(4, x1 - x0 - 1), TRACK_H, 4);
-      g.fill();
-      g.fillStyle = pending ? "#fff" : css("--foreground");
-      g.fillRect(x0 + 2, ZOOM_TOP + 5, 2, TRACK_H - 10);
-      g.fillRect(x1 - 5, ZOOM_TOP + 5, 2, TRACK_H - 10);
-      if (x1 - x0 > 70) g.fillText(`Zoom ${Math.round(z.scale * 100)}%`, x0 + 10, ZOOM_TOP + 12.5);
-      if (selected?.kind === "zoom" && selected.index === index) {
-        g.strokeStyle = css("--ink");
-        g.lineWidth = 2;
-        g.beginPath();
-        g.roundRect(x0 + 1, ZOOM_TOP + 1, Math.max(4, x1 - x0 - 1) - 2, TRACK_H - 2, 4);
-        g.stroke();
-      }
-    }
-
-    // Claude clips track: clips it made, blue until Luke keeps them.
+    // Effect tracks: one block per effect, blue while Claude's and unreviewed.
     g.font = `500 11px ${sans}`;
-    for (const { index, c, a, b } of made) {
+    for (const { item, key, top, a, b } of fx) {
       const x0 = x(a);
       const x1 = x(b);
       if (x1 < 0 || x0 > w) continue;
-      const pending = c.status === "pending";
       const bw = Math.max(4, x1 - x0 - 1);
-      g.fillStyle = pending ? css("--unread") : css("--stroke-strong");
+      g.fillStyle = item.pending ? css("--unread") : css("--stroke-strong");
       g.beginPath();
-      g.roundRect(x0, CLIP_TOP, bw, TRACK_H, 4);
+      g.roundRect(x0, top, bw, TRACK_H, 4);
       g.fill();
-      if (selected?.kind === "clip" && selected.index === index) {
+      if (p.effect && keyOf(p.effect) === key) {
         g.strokeStyle = css("--ink");
         g.lineWidth = 2;
         g.beginPath();
-        g.roundRect(x0 + 1, CLIP_TOP + 1, bw - 2, TRACK_H - 2, 4);
+        g.roundRect(x0 + 1, top + 1, bw - 2, TRACK_H - 2, 4);
         g.stroke();
       }
       g.save();
       g.beginPath();
-      g.rect(x0, CLIP_TOP, bw - 6, TRACK_H);
+      g.rect(x0, top, bw - 6, TRACK_H);
       g.clip();
-      g.fillStyle = pending ? "#fff" : css("--foreground");
-      if (bw > 20) film(g, x0 + 6, CLIP_TOP + 4);
-      if (bw > 40) g.fillText(c.reason || c.file.split("/").pop() || "Clip", x0 + 21, CLIP_TOP + 13);
+      g.fillStyle = item.pending ? "#fff" : css("--foreground");
+      if (bw > 20) glyph(g, item.icon, x0 + 6, top + 4);
+      if (bw > 40) g.fillText(item.label, x0 + 21, top + 13);
       g.restore();
+    }
+
+    // Notes: flags hanging from the ruler.
+    for (const pin of p.pins) {
+      const px = x(sourceToCut(ranges, pin.at));
+      if (px < -6 || px > w + 6) continue;
+      g.fillStyle = pin.done ? css("--stroke-strong") : css("--foreground");
+      g.fillRect(Math.round(px) - 0.5, RULER - 12, 1.5, 12);
+      g.beginPath();
+      g.moveTo(px + 1, RULER - 12);
+      g.lineTo(px + 8, RULER - 9);
+      g.lineTo(px + 1, RULER - 6);
+      g.fill();
     }
 
     // Playhead.
@@ -338,30 +387,23 @@ export function Timeline(p: Props) {
     return Math.max(0, Math.min(total, t));
   };
 
-  /** What's under the pointer: a zoom's edge or body, a clip's edge or body. */
+  /** What's under the pointer: a note, an effect's edge or body, a piece's edge, or a word. */
   const hit = (clientX: number, clientY: number) => {
     const c = canvas.current!;
     const r = c.getBoundingClientRect();
     const y = clientY - r.top;
     const pps = pxPerSec(c.clientWidth);
     const px = (t: number) => r.left + 12 + (t - left) * pps;
-    if (hasClips && y >= CLIP_TOP - 2 && y <= CLIP_TOP + TRACK_H + 2) {
-      for (const bl of made) {
-        const [x0, x1] = [px(bl.a), px(bl.b)];
-        if (clientX < x0 - EDGE || clientX > x1 + EDGE) continue;
-        const mode = Math.abs(clientX - x0) <= EDGE ? "made-left" : Math.abs(clientX - x1) <= EDGE ? "made-right" : "made-move";
-        return { mode, made: bl } as const;
-      }
-      return null;
+    if (y < RULER) {
+      const pin = p.pins.find((n) => Math.abs(px(sourceToCut(ranges, n.at)) + 3 - clientX) <= 6);
+      return pin ? ({ mode: "pin", pin } as const) : null;
     }
-    if (y >= ZOOM_TOP - 2 && y <= ZOOM_TOP + TRACK_H + 2) {
-      for (const bl of blocks) {
-        const [x0, x1] = [px(bl.a), px(bl.b)];
-        if (clientX < x0 - EDGE || clientX > x1 + EDGE) continue;
-        const mode = Math.abs(clientX - x0) <= EDGE ? "zoom-left" : Math.abs(clientX - x1) <= EDGE ? "zoom-right" : "zoom-move";
-        return { mode, block: bl } as const;
-      }
-      return null;
+    for (const f of fx) {
+      if (y < f.top - 2 || y > f.top + TRACK_H + 2) continue;
+      const [x0, x1] = [px(f.a), px(f.b)];
+      if (clientX < x0 - EDGE || clientX > x1 + EDGE) continue;
+      const edge: FxMode = Math.abs(clientX - x0) <= EDGE ? "left" : Math.abs(clientX - x1) <= EDGE ? "right" : "move";
+      return { mode: "fx", edge, f } as const;
     }
     if (y >= LANE_TOP && y <= LANE_TOP + LANE_H) {
       let acc = 0;
@@ -389,7 +431,7 @@ export function Timeline(p: Props) {
       if (!d) return;
       if (d.mode === "scrub") return p.onScrub(timeAt(e.clientX));
       const dt = (e.clientX - d.x) / pxPerSec(canvas.current!.clientWidth);
-      if ("clip" in d) {
+      if (d.mode !== "fx") {
         // Moving an end in or out of the source, rippling what follows.
         const prev = p.ranges[d.clip - 1]?.[1] ?? 0;
         const next = p.ranges[d.clip + 1]?.[0] ?? p.duration;
@@ -398,14 +440,13 @@ export function Timeline(p: Props) {
         return setPreview({ kind: "trim", clip: d.clip, a, b });
       }
       let { a, b } = d;
-      const { index, mode } = d;
-      if (d.mode === "zoom-left" || d.mode === "made-left") a = Math.max(0, Math.min(b - MIN, a + dt));
-      else if (d.mode === "zoom-right" || d.mode === "made-right") b = Math.min(total, Math.max(a + MIN, b + dt));
+      if (d.edge === "left") a = Math.max(0, Math.min(b - MIN, a + dt));
+      else if (d.edge === "right") b = Math.min(total, Math.max(a + MIN, b + dt));
       else {
         const shift = Math.max(-a, Math.min(total - b, dt));
         [a, b] = [a + shift, b + shift];
       }
-      setPreview({ kind: mode.startsWith("made") ? "made" : "zoom", index, a, b });
+      setPreview({ kind: "fx", key: keyOf(d.item.effect), a, b });
     };
     const up = () => {
       const d = drag.current;
@@ -416,32 +457,19 @@ export function Timeline(p: Props) {
       if (preview && d.mode !== "scrub" && Math.abs(preview.a - d.a) < 1e-6 && Math.abs(preview.b - d.b) < 1e-6) preview = null;
       if (d.mode === "scrub") p.onScrubEnd?.();
       else if (preview?.kind === "trim") p.onTrim(preview.clip, preview.a, preview.b);
-      else if (preview?.kind === "made" && d.mode.startsWith("made")) {
-        // Back to source time. Moving keeps where in its file the clip plays
-        // from; trimming the left end moves that point with it. Neither end
-        // can go past the file's own start or end.
-        const c = p.clips[preview.index];
-        const fileStart = c.start - c.offset; // where the file's first frame would sit
-        const fileEnd = fileStart + c.length;
-        let start = cutToSource(p.ranges, preview.a).source;
-        let end = cutToSource(p.ranges, Math.max(0, preview.b - 1e-4)).source + 1e-4;
-        if (d.mode === "made-move") end = start + (c.end - c.start);
-        if (d.mode === "made-right") start = c.start;
-        if (d.mode === "made-left") end = c.end;
-        if (d.mode !== "made-move") [start, end] = [Math.max(start, fileStart), Math.min(end, fileEnd)];
-        const offset = d.mode === "made-move" ? c.offset : c.offset + (start - c.start);
-        p.onClipEdit(preview.index, start, end, offset);
-      }
-      else if (preview?.kind === "zoom" && d.mode.startsWith("zoom")) {
-        // Back to source time, leaving an end that wasn't dragged where it was.
-        // An end exactly at a join belongs to the clip before it.
-        const start = d.mode === "zoom-right" ? d.span[0] : cutToSource(p.ranges, preview.a).source;
-        const end = d.mode === "zoom-left" ? d.span[1] : cutToSource(p.ranges, Math.max(0, preview.b - 1e-4)).source + 1e-4;
-        p.onZoomEdit(preview.index, start, end);
+      else if (preview?.kind === "fx" && d.mode === "fx") {
+        // Back to source time. The end that wasn't dragged stays exactly where it was;
+        // a move keeps the length in the recording. An end exactly at a join belongs to the piece before it.
+        const it = d.item;
+        let start = d.edge === "right" ? it.start : cutToSource(p.ranges, preview.a).source;
+        let end = d.edge === "left" ? it.end : cutToSource(p.ranges, Math.max(0, preview.b - 1e-4)).source + 1e-4;
+        if (d.edge === "move") end = start + (it.end - it.start);
+        if (it.bounds && d.edge !== "move") [start, end] = [Math.max(start, it.bounds[0]), Math.min(end, it.bounds[1])];
+        if (end - start >= 0.05) p.onFxEdit(it.effect, start, end, d.edge);
       }
       setPreview(null);
     };
-    // Select a clip, then ⌫ deletes it. Runs before the app's own keys.
+    // Select a pause, then ⌫ deletes it. Runs before the app's own keys.
     const key = (e: KeyboardEvent) => {
       const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
       if (pause === null || typing || (e.key !== "Backspace" && e.key !== "Delete")) return;
@@ -451,8 +479,7 @@ export function Timeline(p: Props) {
       setPause(null);
     };
     const down = (e: MouseEvent) => {
-      if (e.target === canvas.current) return;
-      setPause(null);
+      if (e.target !== canvas.current) setPause(null);
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
@@ -473,6 +500,7 @@ export function Timeline(p: Props) {
           {timecode(p.time, p.fps, true)} / {timecode(total, p.fps, true)}
         </span>
         <span className="meta">{p.ranges.length} clips</span>
+        <span className="meta tracks">{p.tracks.map((t) => t.name).join(" · ")}</span>
         <span className="spacer" />
         <button className="btn icon ghost" title="Zoom out" onClick={() => zoomTo(zoom - 1)}>
           <Minus size={16} />
@@ -487,18 +515,12 @@ export function Timeline(p: Props) {
         onMouseDown={(e) => {
           const h = hit(e.clientX, e.clientY);
           setPause(null);
-          if (h && (h.mode === "made-left" || h.mode === "made-right" || h.mode === "made-move")) {
-            const { index, a, b } = h.made;
-            drag.current = { mode: h.mode, index, a, b, x: e.clientX };
-            p.onSelectEffect({ kind: "clip", index });
-            setPreview({ kind: "made", index, a, b });
-            return;
-          }
-          if (h && (h.mode === "zoom-left" || h.mode === "zoom-right" || h.mode === "zoom-move")) {
-            const { index, a, b, z } = h.block;
-            drag.current = { mode: h.mode, index, a, b, x: e.clientX, span: zoomSpan(p.words, z) };
-            p.onSelectEffect({ kind: "zoom", index });
-            setPreview({ kind: "zoom", index, a, b });
+          if (h?.mode === "pin") return p.onPin(h.pin.index);
+          if (h?.mode === "fx") {
+            const { item, a, b } = h.f;
+            drag.current = { mode: "fx", edge: h.edge, item, a, b, x: e.clientX };
+            p.onSelectEffect(item.effect);
+            setPreview({ kind: "fx", key: h.f.key, a, b });
             return;
           }
           if (h && (h.mode === "trim-left" || h.mode === "trim-right")) {
@@ -521,7 +543,8 @@ export function Timeline(p: Props) {
         onMouseMove={(e) => {
           if (drag.current) return;
           const h = hit(e.clientX, e.clientY);
-          e.currentTarget.style.cursor = !h || h.mode === "clip" ? "default" : h.mode.endsWith("move") ? "grab" : "ew-resize";
+          e.currentTarget.style.cursor =
+            !h || h.mode === "clip" ? "default" : h.mode === "pin" ? "pointer" : h.mode === "fx" && h.edge === "move" ? "grab" : "ew-resize";
         }}
         onWheel={(e) => {
           const c = canvas.current!;

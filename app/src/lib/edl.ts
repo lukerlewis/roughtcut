@@ -85,6 +85,7 @@ export interface Edits {
   zooms?: Zoom[];
   captions?: Captions;
   clips?: Clip[];
+  texts?: TextFx[];
   /** Play every pause, start to end, as recorded. True until a rough cut tightens them. */
   keepPauses?: boolean;
 }
@@ -336,20 +337,21 @@ export function setAgentStatus(e: Edits, index: number, status: AgentStatus): Ed
   return { ...e, agent, log: [...e.log, { at: now(), by: "you", op, first: c.first, last: c.last, note: c.reason }] };
 }
 
+/** The lists of effects Claude can add, each reviewed like its cuts. */
+export const EFFECT_LISTS = ["zooms", "clips", "texts"] as const;
+export type EffectList = (typeof EFFECT_LISTS)[number];
+
 export function acceptAll(e: Edits): Edits {
   if (pendingCount(e) === 0) return e;
-  return {
-    ...e,
-    agent: e.agent.map((c) => (c.status === "pending" ? { ...c, status: "accepted" as const } : c)),
-    zooms: e.zooms?.map((z) => (z.status === "pending" ? { ...z, status: "accepted" as const } : z)),
-    clips: e.clips?.map((c) => (c.status === "pending" ? { ...c, status: "accepted" as const } : c)),
-    log: [...e.log, { at: now(), by: "you", op: "accept-all" }],
-  };
+  const keep = <T extends { status?: AgentStatus }>(xs?: T[]) => xs?.map((x) => (x.status === "pending" ? { ...x, status: "accepted" as const } : x));
+  const next: Edits = { ...e, agent: keep(e.agent)!, log: [...e.log, { at: now(), by: "you", op: "accept-all" }] };
+  for (const k of EFFECT_LISTS) if (e[k]) (next as any)[k] = keep(e[k] as { status?: AgentStatus }[]);
+  return next;
 }
 
 export function pendingCount(e: Edits): number {
   const pending = (x: { status?: AgentStatus }) => x.status === "pending";
-  return e.agent.filter(pending).length + (e.zooms ?? []).filter(pending).length + (e.clips ?? []).filter(pending).length;
+  return e.agent.filter(pending).length + EFFECT_LISTS.reduce((n, k) => n + ((e[k] ?? []) as { status?: AgentStatus }[]).filter(pending).length, 0);
 }
 
 /** The agent cut containing word i that isn't restored, if any. */
@@ -656,4 +658,68 @@ export function zoomBox(z: { scale: number; x: number; y: number }) {
 export function zoomPointFor(scale: number, left: number, top: number) {
   const room = 1 - 1 / scale;
   return { x: room > 0 ? Math.min(1, Math.max(0, left / room)) : 0.5, y: room > 0 ? Math.min(1, Math.max(0, top / room)) : 0.5 };
+}
+
+// --- Text: titles, lower thirds and callouts ---------------------------------
+
+export type TextStyle = "title" | "lower-third" | "callout";
+
+/** Words on screen over source seconds start..end. x, y place it (0..1 of the
+ *  frame): a title's centre, a lower third's left edge and baseline, the
+ *  point a callout marks. size is its text height as a fraction of the frame. */
+export interface TextFx {
+  style: TextStyle;
+  text: string;
+  sub?: string; // second line: a lower third's role, a title's subtitle
+  start: number;
+  end: number;
+  x: number;
+  y: number;
+  size: number;
+  look?: "plain" | "box"; // white text with a shadow, or dark text on a white box
+  by: "you" | "agent";
+  status?: AgentStatus;
+  reason?: string;
+}
+
+export const TEXT_DEFAULTS: Record<TextStyle, Pick<TextFx, "x" | "y" | "size" | "look">> = {
+  title: { x: 0.5, y: 0.45, size: 0.08, look: "plain" },
+  "lower-third": { x: 0.06, y: 0.8, size: 0.045, look: "box" },
+  callout: { x: 0.6, y: 0.4, size: 0.035, look: "box" },
+};
+
+export function liveTexts(e: Edits): TextFx[] {
+  return (e.texts ?? []).filter((t) => t.status !== "restored");
+}
+
+/** Luke adds text at source seconds start..end. */
+export function addText(e: Edits, style: TextStyle, text: string, start: number, end: number): Edits {
+  const t: TextFx = { style, text, start, end, ...TEXT_DEFAULTS[style], by: "you" };
+  return { ...e, texts: [...(e.texts ?? []), t], log: [...e.log, { at: now(), by: "you", op: "text", note: `${style}: ${text}` }] };
+}
+
+/** Luke changes a text's words, place, size, look or times. Claude's counts as kept once he does. */
+export function setText(e: Edits, index: number, patch: Partial<Omit<TextFx, "by">>): Edits {
+  const t = e.texts?.[index];
+  if (!t) return e;
+  const next = { ...t, ...patch, status: t.by === "agent" ? ("accepted" as const) : t.status };
+  if (next.end - next.start < 0.05) return e;
+  if (JSON.stringify(next) === JSON.stringify(t)) return e;
+  const texts = e.texts!.map((x, i) => (i === index ? next : x));
+  return { ...e, texts, log: [...e.log, { at: now(), by: "you", op: "edit-text", note: next.text }] };
+}
+
+export function setTextStatus(e: Edits, index: number, status: AgentStatus): Edits {
+  const t = e.texts?.[index];
+  if (!t || t.status === status) return e;
+  const texts = e.texts!.map((x, i) => (i === index ? { ...x, status } : x));
+  return { ...e, texts, log: [...e.log, { at: now(), by: "you", op: `${status}-text`, note: t.text }] };
+}
+
+/** Luke deletes a text. Claude's is kept as removed so it won't add it back. */
+export function removeText(e: Edits, index: number): Edits {
+  const t = e.texts?.[index];
+  if (!t) return e;
+  const texts = t.by === "agent" ? e.texts!.map((x, i) => (i === index ? { ...x, status: "restored" as const } : x)) : e.texts!.filter((_, i) => i !== index);
+  return { ...e, texts, log: [...e.log, { at: now(), by: "you", op: "remove-text", note: t.text }] };
 }

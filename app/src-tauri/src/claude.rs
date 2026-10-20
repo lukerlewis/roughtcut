@@ -13,7 +13,7 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct Running(pub Mutex<Option<Child>>);
 
-pub const TOOLS: [&str; 8] = [
+pub const TOOLS: [&str; 10] = [
     "mcp__roughcut__get_edit",
     "mcp__roughcut__cut_words",
     "mcp__roughcut__restore_words",
@@ -22,6 +22,8 @@ pub const TOOLS: [&str; 8] = [
     "mcp__roughcut__set_captions",
     "mcp__roughcut__add_clip",
     "mcp__roughcut__remove_clip",
+    "mcp__roughcut__add_text",
+    "mcp__roughcut__remove_text",
 ];
 
 /// Built-in tools for making clips: FFmpeg and Python to render them, and
@@ -33,10 +35,10 @@ fn brief(recording: &str) -> String {
     format!(
         "You are Claude inside Roughcut, Luke's video editor, talking with him in the app's sidebar while he watches \
          his video \"{name}\". You can read and change the edit with the roughcut tools: call get_edit first, \
-         then cut or restore words, zoom in on words, or turn captions on, all by word index. Your cuts and zooms show to Luke in blue as unreviewed until he keeps or restores \
+         then cut or restore words, zoom in on words, put titles, lower thirds or callouts on screen, or turn captions on, all by word index. Your cuts and zooms show to Luke in blue as unreviewed until he keeps or restores \
          them, so make the change he asks for rather than describing it, and give each one a reason of a few words. \
          Those edits stay fully adjustable by Luke, so always prefer them.\n\n\
-         For anything they can't do (a look or colour change, a background, text on screen, a speed change, an effect), you can make a new clip: \
+         For anything they can't do (a look or colour change, a background, a speed change, an effect), you can make a new clip: \
          render it with ffmpeg or python3 from the recording at \"{recording}\" into the clips/ folder here (mkdir -p clips), \
          then put it on the timeline with add_clip. A clip replaces the recording over source seconds start..end: make it exactly that long, \
          the same size and frame rate as the recording, with its audio for that span (unless asked otherwise), as H.264 MP4. \

@@ -117,6 +117,27 @@ fn tools() -> Value {
             },
         },
         {
+            "name": "add_text",
+            "description": "Put words on screen over words from..to: a title (big, centred), a lower-third (name and role, bottom left) or a callout (a ring on a spot with a label, for pointing at something on screen). Shows to Luke as your unreviewed text; he can edit the words, look, size and place, and drag it on the timeline.",
+            "inputSchema": {
+                "type": "object",
+                "properties": range(json!({
+                    "style": { "type": "string", "enum": ["title", "lower-third", "callout"] },
+                    "text": { "type": "string", "description": "What it says. Keep it short." },
+                    "sub": { "type": "string", "description": "Optional second line: a subtitle, or a lower third's role." },
+                    "x": { "type": "number", "description": "Optional place across, 0..1 (a callout's spot; a title's centre; a lower third's left edge)." },
+                    "y": { "type": "number", "description": "Optional place down, 0..1." },
+                    "reason": { "type": "string", "description": "A few words on why, shown to Luke." },
+                })),
+                "required": ["style", "text", "from", "to", "reason"],
+            },
+        },
+        {
+            "name": "remove_text",
+            "description": "Take your text overlapping words from..to off the screen.",
+            "inputSchema": { "type": "object", "properties": range(json!({})), "required": ["from", "to"] },
+        },
+        {
             "name": "remove_clip",
             "description": "Take your clips overlapping source seconds start..end off the timeline. The recording plays there again.",
             "inputSchema": {
@@ -223,6 +244,41 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             edits::save(folder, &e)?;
             Ok(format!("Added {rel} on the Claude clips track for {start:.2}-{end:.2}s. Luke will see it in blue until he reviews it."))
         }
+        "add_text" => {
+            let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
+            if a > b {
+                return Err("`from` must not be after `to`".into());
+            }
+            let style = args["style"].as_str().unwrap_or("title");
+            if !["title", "lower-third", "callout"].contains(&style) {
+                return Err("`style` is title, lower-third or callout".into());
+            }
+            let text = args["text"].as_str().filter(|t| !t.trim().is_empty()).ok_or("Give the `text`.")?;
+            let reason = args["reason"].as_str().filter(|r| !r.trim().is_empty()).ok_or("Give a short `reason`.")?;
+            let place = match (args["x"].as_f64(), args["y"].as_f64()) {
+                (Some(x), Some(y)) => Some((x.clamp(0.0, 1.0), y.clamp(0.0, 1.0))),
+                _ => None,
+            };
+            // Hold it a little either side of the words.
+            let (start, end) = ((words[a].start - 0.1).max(0.0), (words[b].end + 0.4).min(duration));
+            edits::add_text(&mut e, style, text.trim(), args["sub"].as_str(), start, end, place, reason.trim());
+            edits::save(folder, &e)?;
+            Ok(format!("Added a {style} \"{}\" over {a}-{b} ({start:.2}-{end:.2}s). Luke will see it in blue until he reviews it.", text.trim()))
+        }
+        "remove_text" => {
+            let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
+            let (start, end) = (words[a].start, words[b.max(a)].end);
+            let mut count = 0;
+            for t in edits::texts(&mut e).iter_mut() {
+                let (s, f) = (t["start"].as_f64().unwrap_or(0.0), t["end"].as_f64().unwrap_or(0.0));
+                if t["by"] == "agent" && t["status"] != "restored" && s < end && f > start {
+                    t["status"] = Value::String("restored".into());
+                    count += 1;
+                }
+            }
+            edits::save(folder, &e)?;
+            Ok(format!("Took {count} text(s) off the screen."))
+        }
         "remove_clip" => {
             let (start, end) = (args["start"].as_f64().ok_or("`start` must be seconds")?, args["end"].as_f64().ok_or("`end` must be seconds")?);
             let mut n = 0;
@@ -297,6 +353,20 @@ fn describe(words: &[edits::Word], e: &edits::Edits, duration: f64) -> String {
         Some(c) if c.on => format!("Captions: on, {} style\n", c.style),
         _ => "Captions: off\n".into(),
     };
+    let texts: Vec<&Value> = e.other.get("texts").and_then(Value::as_array).map(|a| a.iter().filter(|t| t["status"] != "restored").collect()).unwrap_or_default();
+    if !texts.is_empty() {
+        s += "Text on screen:\n";
+        for t in texts {
+            let who = if t["by"] == "agent" { format!("yours, {}", t["status"].as_str().unwrap_or("pending")) } else { "Luke's".into() };
+            s += &format!(
+                "{} \"{}\" {:.2}-{:.2}s ({who})\n",
+                t["style"].as_str().unwrap_or("title"),
+                t["text"].as_str().unwrap_or(""),
+                t["start"].as_f64().unwrap_or(0.0),
+                t["end"].as_f64().unwrap_or(0.0)
+            );
+        }
+    }
     let clips: Vec<_> = e.clips.iter().filter(|c| c.status.as_deref() != Some("restored")).collect();
     if !clips.is_empty() {
         s += "Clips on the timeline (playing instead of the recording):\n";
@@ -341,7 +411,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 8);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 10);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");
@@ -364,6 +434,14 @@ mod tests {
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[2-4] 130% (yours, pending) key line"), "{text}");
         assert!(text.contains("Captions: on, bold style"), "{text}");
+
+        let t = rpc(&dir, "tools/call", json!({ "name": "add_text", "arguments": { "style": "title", "text": "30 days", "from": 6, "to": 7, "reason": "the hook" } }));
+        assert!(t["content"][0]["text"].as_str().unwrap().starts_with("Added a title"), "{t}");
+        let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
+        assert!(edit["content"][0]["text"].as_str().unwrap().contains("30 days"));
+        rpc(&dir, "tools/call", json!({ "name": "remove_text", "arguments": { "from": 7, "to": 7 } }));
+        let saved: Value = serde_json::from_str(&fs::read_to_string(dir.join("edits.json")).unwrap()).unwrap();
+        assert_eq!(saved["texts"][0]["status"], "restored");
 
         let bad = rpc(&dir, "tools/call", json!({ "name": "cut_words", "arguments": { "from": 3, "to": 99, "reason": "x" } }));
         assert_eq!(bad["isError"], true);

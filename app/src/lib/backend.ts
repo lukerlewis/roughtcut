@@ -94,18 +94,19 @@ export async function waveform(path: string, folder: string): Promise<Uint8Array
   return new Uint8Array(await invoke<number[]>("waveform", { path, folder }));
 }
 
-/** Renders the cut: the kept pieces (some zoomed) and, if on, burned-in captions. */
+/** Renders the cut: the kept pieces (some zoomed) with the overlay layers (captions, titles) burned in. */
 export async function exportCut(
   source: string,
   segments: Segment[],
-  captions: CaptionStrips | null,
+  overlays: CaptionStrips[],
   dest: string,
 ): Promise<void> {
   if (!inApp) {
+    (window as any).__lastExport = { source, segments, overlays: overlays.map((o) => ({ top: o.top, frames: o.frames.length })), dest };
     await new Promise((r) => setTimeout(r, 400));
     return;
   }
-  return invoke("export", { source, segments, captions, dest });
+  return invoke("export", { source, segments, overlays, dest });
 }
 
 // --- Claude in the sidebar -------------------------------------------------

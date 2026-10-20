@@ -124,7 +124,42 @@ pub fn load(folder: &Path) -> Result<Edits, String> {
             status: "pending".into(),
         })
         .collect();
-    Ok(Edits { version: 1, agent, user: vec![], log: vec![], zooms: vec![], captions: None, clips: vec![], other: Default::default() })
+    let mut other = serde_json::Map::new();
+    if d["by"] == "none" {
+        // Opened uncut: every pause plays until Luke asks for a rough cut.
+        other.insert("keepPauses".into(), Value::Bool(true));
+    }
+    Ok(Edits { version: 1, agent, user: vec![], log: vec![], zooms: vec![], captions: None, clips: vec![], other })
+}
+
+/// Text on screen (titles, lower thirds, callouts). Kept as JSON: the editor
+/// owns its shape, Claude adds and removes items.
+pub fn texts(e: &mut Edits) -> &mut Vec<Value> {
+    let v = e.other.entry("texts").or_insert_with(|| Value::Array(vec![]));
+    if !v.is_array() {
+        *v = Value::Array(vec![]);
+    }
+    v.as_array_mut().unwrap()
+}
+
+/// Claude puts text on screen over source seconds start..end.
+#[allow(clippy::too_many_arguments)]
+pub fn add_text(e: &mut Edits, style: &str, text: &str, sub: Option<&str>, start: f64, end: f64, place: Option<(f64, f64)>, reason: &str) {
+    let (x, y, size, look) = match style {
+        "title" => (0.5, 0.45, 0.08, "plain"),
+        "lower-third" => (0.06, 0.8, 0.045, "box"),
+        _ => (0.6, 0.4, 0.035, "box"),
+    };
+    let (x, y) = place.unwrap_or((x, y));
+    let mut t = serde_json::json!({
+        "style": style, "text": text, "start": start, "end": end, "x": x, "y": y, "size": size, "look": look,
+        "by": "agent", "status": "pending", "reason": reason,
+    });
+    if let Some(sub) = sub.filter(|s| !s.trim().is_empty()) {
+        t["sub"] = Value::String(sub.into());
+    }
+    texts(e).push(t);
+    e.log.push(serde_json::json!({ "at": now(), "by": "agent", "op": "text", "note": format!("{style}: {text}") }));
 }
 
 pub fn save(folder: &Path, e: &Edits) -> Result<(), String> {

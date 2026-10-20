@@ -32,6 +32,9 @@ import {
   shownKinds,
   trimClip,
   zoomSpan,
+  addText,
+  setText,
+  removeText,
   type Edits,
   type Word,
 } from "./edl";
@@ -227,5 +230,20 @@ describe("effect settings", () => {
     const box = zoomBox({ scale: 2, x: 0.25, y: 1 });
     expect(box).toEqual({ left: 0.125, top: 0.5, size: 0.5 });
     expect(zoomPointFor(2, box.left, box.top)).toEqual({ x: 0.25, y: 1 });
+  });
+});
+
+describe("text on screen", () => {
+  it("adds, edits and removes text; Claude's counts as kept once Luke edits it", () => {
+    let e: Edits = { version: 1, agent: [], user: [], log: [] };
+    e = addText(e, "lower-third", "Luke Lewis", 1, 4);
+    expect(e.texts![0]).toMatchObject({ style: "lower-third", x: 0.06, look: "box", by: "you" });
+    expect(removeText(e, 0).texts).toEqual([]);
+    const c: Edits = { ...e, texts: [{ ...e.texts![0], by: "agent", status: "pending" }] };
+    expect(pendingCount(c)).toBe(1);
+    const edited = setText(c, 0, { text: "Luke" });
+    expect(edited.texts![0]).toMatchObject({ text: "Luke", status: "accepted" });
+    expect(setText(c, 0, { start: 2, end: 2 })).toBe(c);
+    expect(removeText(c, 0).texts![0].status).toBe("restored");
   });
 });

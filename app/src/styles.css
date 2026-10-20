@@ -11,6 +11,11 @@
   font-weight: 500;
 }
 @font-face {
+  font-family: "Geist";
+  src: url("../node_modules/geist/dist/fonts/geist-sans/Geist-Bold.woff2") format("woff2");
+  font-weight: 700;
+}
+@font-face {
   font-family: "Geist Mono";
   src: url("../node_modules/geist/dist/fonts/geist-mono/GeistMono-Regular.woff2") format("woff2");
   font-weight: 400;
@@ -279,3 +284,8 @@ button.action:hover { background: var(--muted); }
 .zoombox:active { cursor: grabbing; }
 .zoombox::after { content: ""; position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px; border-radius: 50%; border: 1.5px solid #fff; }
 .zoomdim { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.seg.wide { display: flex; } .seg.wide button { flex: 1; justify-content: center; }
+.effect .field { width: 100%; }
+/* Titles and callouts over the video; draggable while their settings are open */
+.screen canvas.graphics { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.screen canvas.graphics.editing { pointer-events: auto; cursor: move; }
