@@ -204,10 +204,40 @@ async function mockClaude(_prompt: string) {
   }
 }
 
-/** A recording the app was opened with, if any. */
+/** A recording the app was opened with, or else the project open last time. */
 export async function launchFile(): Promise<string | null> {
   if (!inApp) return null;
   return invoke("launch_file");
+}
+
+/** A recording Luke has edited, with its rough-cut folder. Times are Unix seconds. */
+export interface ProjectInfo {
+  source: string;
+  name: string;
+  folder: string;
+  opened: number;
+  saved: number | null;
+}
+
+export async function recentProjects(): Promise<ProjectInfo[]> {
+  if (!inApp) {
+    const now = Date.now() / 1000;
+    return [
+      { source: "/fixtures/recording.webm", name: "recording", folder: "/fixtures", opened: now - 600, saved: now - 620 },
+      { source: "/Users/luke/Movies/Roughcut/Recording 2026-10-19 14.02.mov", name: "Recording 2026-10-19 14.02", folder: "/Users/luke/Movies/Roughcut", opened: now - 90000, saved: null },
+    ];
+  }
+  return invoke("recent_projects");
+}
+
+/** Takes a project off the list; its files stay where they are. */
+export async function forgetProject(source: string): Promise<void> {
+  if (inApp) await invoke("forget_project", { source });
+}
+
+/** Tells the app everything is saved, so it can quit. */
+export async function savedForQuit(): Promise<void> {
+  if (inApp) await invoke("saved_for_quit");
 }
 
 export async function reveal(path: string): Promise<void> {

@@ -1,4 +1,4 @@
-import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, Mic, Scissors, SkipBack } from "lucide-react";
+import { Captions as CaptionsIcon, Check, Download, FolderOpen, LayoutGrid, Pause, Play, Circle, Mic, Scissors, SkipBack, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
@@ -95,6 +95,17 @@ interface Project {
 }
 
 const name = (path: string) => path.split("/").pop() ?? path;
+
+/** "just now", "5 minutes ago", "yesterday", "12 Oct", from Unix seconds. */
+export function ago(seconds: number, now = Date.now() / 1000): string {
+  const s = Math.max(0, now - seconds);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} minute${s < 120 ? "" : "s"} ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} hour${s < 7200 ? "" : "s"} ago`;
+  if (s < 172800) return "yesterday";
+  if (s < 604800) return `${Math.floor(s / 86400)} days ago`;
+  return new Date(seconds * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
 const stem = (path: string) => name(path).replace(/\.[^.]+$/, "");
 
 export default function App() {
@@ -120,10 +131,68 @@ export default function App() {
   const videoB = useRef<HTMLVideoElement>(null);
   const player = useRef<CutPlayer | null>(null);
 
+  // Saving: every change is written to the project a moment after it's made,
+  // and now on ⌘S, before quitting and before leaving for another project.
+  const [saved, setSaved] = useState<{ at: number | null; busy: boolean; error?: string }>({ at: null, busy: false });
+  const latest = useRef<{ folder: string; edits: Edits } | null>(null);
+  const dirty = useRef(false);
+  const writing = useRef<Promise<void>>(Promise.resolve());
+  const saveNow = useCallback((always = false) => {
+    writing.current = writing.current.then(async () => {
+      const l = latest.current;
+      if (!l || (!dirty.current && !always)) return;
+      dirty.current = false;
+      setSaved((x) => ({ ...x, busy: true }));
+      try {
+        await Promise.all([backend.saveEdits(l.folder, l.edits), ...viewWrites.current.values()]);
+        setSaved({ at: Date.now(), busy: false });
+      } catch (e) {
+        dirty.current = true;
+        setSaved((x) => ({ ...x, busy: false, error: String(e) }));
+      }
+    });
+    return writing.current;
+  }, []);
+
+  useEffect(() => {
+    if (!edits || !project) return;
+    latest.current = { folder: project.folder, edits };
+    dirty.current = true;
+    const t = setTimeout(() => saveNow(), 300);
+    return () => clearTimeout(t);
+  }, [edits, project, saveNow]);
+
+  // Saved projects, for the start screen.
+  const [projects, setProjects] = useState<backend.ProjectInfo[]>([]);
+  const showProjects = useCallback(async () => {
+    await saveNow();
+    player.current?.pause();
+    latest.current = null;
+    setProject(null);
+    setEdits(null);
+    setPhase({ kind: "empty" });
+  }, [saveNow]);
+  useEffect(() => {
+    if (!project) backend.recentProjects().then(setProjects, () => setProjects([]));
+  }, [project]);
+  const forgetProject = (source: string) => backend.forgetProject(source).then(() => setProjects((all) => all.filter((p) => p.source !== source)));
+
+  useEffect(() => {
+    const offs = [
+      backend.listen<boolean>("save-now", async (quitting) => {
+        await saveNow(!quitting);
+        if (quitting) await backend.savedForQuit();
+      }),
+      backend.listen("show-projects", () => showProjects()),
+    ];
+    return () => offs.forEach((o) => o.then((f) => f()));
+  }, [saveNow, showProjects]);
+
   // --- Opening a recording -------------------------------------------------
 
   const open = useCallback(async (path: string) => {
     try {
+      await saveNow();
       player.current?.pause();
       setSelection(null);
       setFocus(-1);
@@ -134,10 +203,15 @@ export default function App() {
         await backend.runRoughCut(path, false);
         opened = await backend.openRecording(path);
       }
-      const [loaded, info, url] = await Promise.all([backend.loadCut(opened.folder), backend.probe(path), backend.videoUrl(path)]);
+      const [loaded, info, url, savedChat] = await Promise.all([
+        backend.loadCut(opened.folder),
+        backend.probe(path),
+        backend.videoUrl(path),
+        backend.loadChat(opened.folder).catch(() => null),
+      ]);
       history.current = { undo: [], redo: [] };
       setEdits(loaded.edits ?? fromDecisions(loaded.decisions));
-      setChat((await backend.loadChat(opened.folder).catch(() => null)) ?? { session: null, messages: [] });
+      setChat(savedChat ?? { session: null, messages: [] });
       setProject({ source: path, folder: opened.folder, url, info, words: loaded.words, summary: loaded.decisions.summary ?? "" });
       setPhase({ kind: "ready" });
       backend.recordingParts(path).then(setParts, () => setParts(null));
@@ -214,13 +288,6 @@ export default function App() {
       setEdits(next);
     }
   };
-
-  // Save a moment after each change.
-  useEffect(() => {
-    if (!edits || !project) return;
-    const t = setTimeout(() => backend.saveEdits(project.folder, edits).catch(console.error), 300);
-    return () => clearTimeout(t);
-  }, [edits, project]);
 
   // Joins in the timeline that hide one of Claude's unreviewed cuts.
   const claudeJoins = useMemo(() => {
@@ -970,6 +1037,11 @@ export default function App() {
     const key = (e: KeyboardEvent) => {
       if (phase.kind !== "ready" || exporting) return;
       const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        saveNow(true);
+        return;
+      }
       if (e.target instanceof HTMLElement && e.target.closest("input[type=text], input:not([type]), textarea, [contenteditable]")) return;
       if (e.key === " ") {
         e.preventDefault();
@@ -1105,6 +1177,24 @@ export default function App() {
                 </button>
               </div>
               {phase.kind === "error" && <p className="error" style={{ marginTop: 16 }}>{phase.message}</p>}
+              {projects.length > 0 && (
+                <div className="projects">
+                  <h2>Projects</h2>
+                  {projects.map((p) => (
+                    <div key={p.source} className="project" onClick={() => open(p.source)} title={p.source}>
+                      <span className="project-name">{p.name}</span>
+                      <span className="project-when">{p.saved ? `Edited ${ago(p.saved)}` : `Opened ${ago(p.opened)}`}</span>
+                      <button
+                        className="btn ghost icon"
+                        title="Take off this list (the recording and its edits stay where they are)"
+                        onClick={(e) => (e.stopPropagation(), forgetProject(p.source))}
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1115,7 +1205,7 @@ export default function App() {
 
   const pending = pendingCount(edits);
   const tracks = effectTracks(edits, words);
-  const saved = project.info.duration - cutDuration(ranges);
+  const shorter = project.info.duration - cutDuration(ranges);
 
   return (
     <div className="app">
@@ -1124,7 +1214,14 @@ export default function App() {
         <span className="sub mono">
           {timecode(project.info.duration)} → {timecode(cutDuration(ranges))}
         </span>
-        <span className="sub">{saved > 0 ? `${Math.round((saved / project.info.duration) * 100)}% shorter` : ""}</span>
+        <span className="sub">{shorter > 0 ? `${Math.round((shorter / project.info.duration) * 100)}% shorter` : ""}</span>
+        <button
+          className={`saved-state ${saved.error ? "failed" : ""}`}
+          onClick={() => saveNow(true)}
+          title={saved.error ?? "Every change is saved to this project as you go. Click or press ⌘S to save now."}
+        >
+          {saved.error ? "Couldn't save" : saved.busy ? "Saving…" : saved.at ? <><Check size={12} /> Saved</> : ""}
+        </button>
         <span className="spacer" data-tauri-drag-region />
         <Updates />
         <button className="btn ghost" onClick={openRoughCut} disabled={!!cutting || asking} title="Choose what Claude does to this video">
@@ -1157,8 +1254,8 @@ export default function App() {
         <button className="btn ghost" onClick={() => setRecording("open")} title="Record your screen, camera and voice">
           <Circle size={16} /> <span className="lbl">Record</span>
         </button>
-        <button className="btn ghost" onClick={choose} title="Open a recording">
-          <FolderOpen size={16} /> <span className="lbl">Open</span>
+        <button className="btn ghost" onClick={showProjects} title="Your projects, or open another recording (⇧⌘O)">
+          <LayoutGrid size={16} /> <span className="lbl">Projects</span>
         </button>
         <button className="btn primary" onClick={startExport} disabled={!ranges.length}>
           <Download size={16} /> Export

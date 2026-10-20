@@ -10,6 +10,7 @@ mod graphics;
 mod hyperframes;
 mod markers;
 mod mcp;
+mod projects;
 mod matte;
 mod media;
 mod recorder;
@@ -27,10 +28,11 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter};
-#[cfg(target_os = "macos")]
-use tauri::Manager;
+use std::time::Duration;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// A recording handed to the app at launch: from the command line, or from
 /// Finder's "Open With" before the window was ready.
@@ -58,6 +60,9 @@ fn open_recording(path: String) -> Result<Opened, String> {
         return Err(format!("Can't find {path}"));
     }
     let folder = cut_folder(&source);
+    if let Err(e) = projects::remember(&path) {
+        eprintln!("couldn't remember the project: {e}");
+    }
     let has_cut = folder.join("words.json").is_file() && folder.join("decisions.json").is_file();
     Ok(Opened { source: path, folder: folder.to_string_lossy().into(), has_cut })
 }
@@ -455,9 +460,106 @@ fn save_chat(folder: String, chat: Value) -> Result<(), String> {
     fs::rename(&tmp, dir.join("chat.json")).map_err(|e| e.to_string())
 }
 
+/// The recording to open at launch: one handed to the app, or else the
+/// project Luke had open last.
 #[tauri::command]
 fn launch_file(launch: tauri::State<Launch>) -> Option<String> {
-    launch.0.lock().unwrap().take()
+    launch.0.lock().unwrap().take().or_else(projects::last)
+}
+
+#[tauri::command]
+fn recent_projects() -> Vec<Value> {
+    projects::list()
+}
+
+#[tauri::command]
+fn forget_project(source: String) -> Result<(), String> {
+    projects::forget(&source)
+}
+
+/// Quitting: the window saves what's on screen first ("save-now" with
+/// `true`), says so with `saved_for_quit`, then the app closes. If the
+/// window doesn't answer in a few seconds it closes anyway.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+static SAVED: AtomicBool = AtomicBool::new(false);
+
+fn save_then_quit(app: &AppHandle) {
+    if QUITTING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _ = app.emit("save-now", true);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        for _ in 0..40 {
+            if SAVED.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        SAVED.store(true, Ordering::SeqCst);
+        app.exit(0);
+    });
+}
+
+#[tauri::command]
+fn saved_for_quit() {
+    SAVED.store(true, Ordering::SeqCst);
+}
+
+/// The Mac menu bar, as Tauri's own but with Save and Projects, and a Quit
+/// that saves first.
+fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let sep = || PredefinedMenuItem::separator(app);
+    Menu::with_items(
+        app,
+        &[
+            &Submenu::with_items(
+                app,
+                "Roughcut",
+                true,
+                &[
+                    &PredefinedMenuItem::about(app, None, None)?,
+                    &sep()?,
+                    &PredefinedMenuItem::hide(app, None)?,
+                    &PredefinedMenuItem::hide_others(app, None)?,
+                    &PredefinedMenuItem::show_all(app, None)?,
+                    &sep()?,
+                    &MenuItem::with_id(app, "quit", "Quit Roughcut", true, Some("CmdOrCtrl+Q"))?,
+                ],
+            )?,
+            &Submenu::with_items(
+                app,
+                "File",
+                true,
+                &[
+                    &MenuItem::with_id(app, "save", "Save", true, Some("CmdOrCtrl+S"))?,
+                    &MenuItem::with_id(app, "projects", "Projects…", true, Some("CmdOrCtrl+Shift+O"))?,
+                    &sep()?,
+                    &PredefinedMenuItem::close_window(app, None)?,
+                ],
+            )?,
+            &Submenu::with_items(
+                app,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(app, None)?,
+                    &PredefinedMenuItem::redo(app, None)?,
+                    &sep()?,
+                    &PredefinedMenuItem::cut(app, None)?,
+                    &PredefinedMenuItem::copy(app, None)?,
+                    &PredefinedMenuItem::paste(app, None)?,
+                    &PredefinedMenuItem::select_all(app, None)?,
+                ],
+            )?,
+            &Submenu::with_items(
+                app,
+                "Window",
+                true,
+                &[&PredefinedMenuItem::minimize(app, None)?, &PredefinedMenuItem::maximize(app, None)?, &sep()?, &PredefinedMenuItem::fullscreen(app, None)?],
+            )?,
+        ],
+    )
 }
 
 /// Where the player loads a recording from (see server.rs).
@@ -535,6 +637,26 @@ pub fn run() {
         .manage(recorder::Recording::default())
         .manage(server::Server::start().expect("couldn't start the video server"))
         .plugin(tauri_plugin_dialog::init())
+        .menu(menu)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "quit" => save_then_quit(app),
+            "save" => {
+                let _ = app.emit("save-now", false);
+            }
+            "projects" => {
+                let _ = app.emit("show-projects", ());
+            }
+            _ => {}
+        })
+        .on_window_event(|window, event| {
+            // Closing the window quits, so it saves first too.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if !SAVED.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                    save_then_quit(window.app_handle());
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             open_recording,
             run_rough_cut,
@@ -560,6 +682,9 @@ pub fn run() {
             export,
             reveal,
             launch_file,
+            recent_projects,
+            forget_project,
+            saved_for_quit,
             video_url,
             ask_claude,
             stop_claude,
@@ -586,6 +711,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while starting Roughcut")
         .run(|app, event| {
+            // Any other way out (the Dock's Quit, logging out) saves first too.
+            if let tauri::RunEvent::ExitRequested { api, code: None, .. } = &event {
+                if !SAVED.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                    save_then_quit(app);
+                }
+            }
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Opened { urls } = event {
                 if let Some(path) = urls.iter().find_map(|u| u.to_file_path().ok()) {
