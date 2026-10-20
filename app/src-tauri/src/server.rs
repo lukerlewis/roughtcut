@@ -82,6 +82,11 @@ fn decode(s: &str) -> String {
 fn content_type(path: &Path) -> &'static str {
     match path.extension().map(|e| e.to_string_lossy().to_lowercase()).as_deref() {
         Some("mov") => "video/quicktime",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
         Some("mp4") | Some("m4v") => "video/mp4",
         Some("webm") => "video/webm",
         Some("mkv") => "video/x-matroska",

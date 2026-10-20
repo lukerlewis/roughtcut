@@ -1,6 +1,6 @@
-import { EyeOff, Gauge, LayoutPanelLeft, MessageSquare, MousePointerClick, PanelBottom, Square, Type, User, X, ZoomIn } from "lucide-react";
+import { EyeOff, ImageIcon, ImagePlus, Gauge, LayoutPanelLeft, MessageSquare, MousePointerClick, PanelBottom, Square, Type, User, X, ZoomIn } from "lucide-react";
 import { useRef, type ReactNode } from "react";
-import type { TextStyle } from "../lib/edl";
+import type { Motion, TextStyle } from "../lib/edl";
 
 /** Something Luke can drop on the timeline. */
 export type LibraryItem =
@@ -11,13 +11,16 @@ export type LibraryItem =
 export interface Asset {
   id: string;
   name: string;
-  style: TextStyle;
+  style: TextStyle; // "image" for a picture
   text: string;
   sub?: string;
   size: number;
   look?: "plain" | "box";
   x: number;
   y: number;
+  src?: string; // an image's file, kept in Luke's assets folder
+  w?: number;
+  motion?: Motion;
 }
 
 const TILES: { title: string; items: { item: LibraryItem; label: string; icon: ReactNode; key?: string; needsParts?: boolean }[] }[] = [
@@ -52,6 +55,8 @@ export function Library(p: {
   onAdd: (item: LibraryItem, at: { clientX: number; clientY: number } | null) => void;
   onDeleteAsset: (id: string) => void;
   onZoomToClicks: () => void;
+  onAddImage: () => void;
+  imageUrl: (src: string) => string | undefined; // for thumbnails
 }) {
   const ghost = useRef<HTMLDivElement | null>(null);
 
@@ -120,7 +125,15 @@ export function Library(p: {
               tile(
                 { kind: "asset", id: a.id },
                 a.name,
-                a.style === "lower-third" ? <PanelBottom size={16} /> : a.style === "callout" ? <Square size={16} /> : <Type size={16} />,
+                a.style === "image" ? (
+                  p.imageUrl(a.src ?? "") ? <img className="thumb" src={p.imageUrl(a.src ?? "")} alt="" draggable={false} /> : <ImageIcon size={16} />
+                ) : a.style === "lower-third" ? (
+                  <PanelBottom size={16} />
+                ) : a.style === "callout" ? (
+                  <Square size={16} />
+                ) : (
+                  <Type size={16} />
+                ),
                 undefined,
                 false,
                 <button
@@ -137,6 +150,9 @@ export function Library(p: {
         ) : (
           <p className="hint">Make a title or lower third look right, then click “Save as asset” in its settings to reuse it in any video.</p>
         )}
+        <button className="btn add-image" onClick={p.onAddImage}>
+          <ImagePlus size={14} /> Add an image…
+        </button>
       </section>
       {p.recordedHere && (
         <section>

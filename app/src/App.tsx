@@ -15,10 +15,12 @@ import * as backend from "./lib/backend";
 import { alignWords } from "./lib/align";
 import { captionStrips } from "./lib/captions";
 import { effectStart, effectTracks, moveEffect, removeEffect, setEffectStatus } from "./lib/effects";
-import { drawAt, graphicsLayer, type Placed } from "./lib/graphics";
+import { drawAt, graphicsLayer, loadImage, type Placed } from "./lib/graphics";
 import {
   acceptAll,
   addText,
+  MOTION_DEFAULTS,
+  type Motion,
   addNote,
   addRendered,
   rerender,
@@ -513,12 +515,16 @@ export default function App() {
     if (b > length) [a, b] = [Math.max(0, length - 3), length];
     const [start, end] = [cutToSource(ranges, a).source, cutToSource(ranges, b).source];
     const index = edits.texts?.length ?? 0;
-    const words0 = { title: "Your title", "lower-third": "Your name", callout: "Look here" }[style];
+    const words0 = { title: "Your title", "lower-third": "Your name", callout: "Look here", image: "" }[style];
     change((x) => {
-      const added = addText(x, asset?.style ?? style, asset?.text ?? words0, start, end);
-      return asset ? setText(added, index, { sub: asset.sub, size: asset.size, look: asset.look, x: asset.x, y: asset.y }) : added;
+      const added = addText(x, asset?.style ?? style, asset?.text ?? words0, start, end, motionDefaults[asset?.style ?? style]);
+      if (!asset) return added;
+      const { id: _, name, ...look } = asset;
+      return setText(added, index, { ...look, text: asset.text || name });
     });
     setSelection(null);
+    // Show it on the video straight away (pickEffect below can't see it yet).
+    if (state.source < start || state.source > end) player.current?.seekSource(start + 0.01);
     setTimeout(() => pickEffect({ kind: "text", index }), 0);
   };
 
@@ -544,13 +550,52 @@ export default function App() {
   useEffect(() => {
     backend.loadAssets().then(setAssets, () => setAssets([]));
   }, []);
+
+  // How each kind of graphic moves unless Luke changes it: his saved defaults over the built-in ones.
+  const [motionDefaults, setMotionDefaults] = useState<Record<TextStyle, Motion>>(MOTION_DEFAULTS);
+  useEffect(() => {
+    backend.loadStyle().then((s) => setMotionDefaults({ ...MOTION_DEFAULTS, ...s.motion }), () => {});
+  }, []);
+  const makeMotionDefault = (style: TextStyle, motion: Motion) => {
+    setMotionDefaults((m) => ({ ...m, [style]: motion }));
+    backend.setMotionDefault(style, motion).then(
+      () => setNotice(`New ${style === "lower-third" ? "lower thirds" : `${style}s`} will move like this. Claude will use it too.`),
+      (e) => setNotice(String(e)),
+    );
+  };
+
+  // Pictures (in the edit and in Luke's assets), served to the viewer and loaded for drawing.
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  const [, setImagesLoaded] = useState(0);
+  useEffect(() => {
+    const srcs = new Set([...(edits?.texts ?? []).map((t) => t.src), ...assets.map((a) => a.src)].filter((s): s is string => !!s));
+    for (const src of srcs)
+      if (!imageUrls[src])
+        backend.videoUrl(src).then((u) => {
+          setImageUrls((m) => ({ ...m, [src]: u }));
+          loadImage(src, u).then(() => setImagesLoaded((n) => n + 1), () => {});
+        });
+  }, [edits, assets, imageUrls]);
+  const addImage = async () => {
+    const path = await backend.chooseImage();
+    if (!path) return;
+    try {
+      const src = await backend.importImage(path);
+      const name = (path.split("/").pop() ?? "Picture").replace(/\.[^.]+$/, "");
+      const asset: Asset = { id: `${Date.now()}`, name, style: "image", src, text: "", size: 0.3, w: 0.3, x: 0.5, y: 0.5 };
+      saveAssets([...assets, asset]);
+      setNotice(`Added \u201c${name}\u201d to your assets. Drag it onto the timeline.`);
+    } catch (e) {
+      setNotice(String(e));
+    }
+  };
   const saveAssets = (next: Asset[]) => {
     setAssets(next);
     backend.saveAssets(next).catch((e) => setNotice(String(e)));
   };
   const saveAsset = (t: TextFx) => {
-    const name = t.text.trim() || "Untitled";
-    const asset: Asset = { id: `${Date.now()}`, name, style: t.style, text: t.text, sub: t.sub, size: t.size, look: t.look, x: t.x, y: t.y };
+    const name = t.text.trim() || (t.style === "image" ? "Picture" : "Untitled");
+    const asset: Asset = { id: `${Date.now()}`, name, style: t.style, text: t.text, sub: t.sub, size: t.size, look: t.look, x: t.x, y: t.y, src: t.src, w: t.w, motion: t.motion };
     saveAssets([...assets.filter((a) => a.name !== name), asset]);
     setNotice(`Saved \u201c${name}\u201d to your assets. Drag it from Library into any video.`);
   };
@@ -826,6 +871,8 @@ export default function App() {
     if (!dest) return;
     setExporting({ progress: 0, dest, done: false });
     try {
+      // Every picture has to be loaded before the frames are drawn.
+      await Promise.all((edits?.texts ?? []).filter((t) => t.src).map(async (t) => loadImage(t.src!, await backend.videoUrl(t.src!))));
       const layers = [
         captions.on && cues.length ? captionStrips(cues, captions.style, project.info.width, project.info.height) : null,
         await graphicsLayer(placed.map((p) => ({ ...p, full: false })), project.info.width, project.info.height, project.info.fps),
@@ -960,6 +1007,8 @@ export default function App() {
               onAdd={addFromLibrary}
               onDeleteAsset={(id) => saveAssets(assets.filter((a) => a.id !== id))}
               onZoomToClicks={zoomToClicks}
+              onAddImage={() => void addImage()}
+              imageUrl={(src) => imageUrls[src]}
             />
           ) : (
           <Transcript
@@ -1128,6 +1177,7 @@ export default function App() {
                 setLook(null);
               }}
               onZoomEase={(ease) => effect && change((x) => setZoomEase(x, effect.index, ease))}
+              onMotionDefault={makeMotionDefault}
               onPreview={() => {
                 if (!effect) return;
                 const at = effectStart(edits, words, effect);

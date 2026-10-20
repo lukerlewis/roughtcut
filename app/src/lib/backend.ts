@@ -3,7 +3,7 @@
 
 import type { Asset } from "../components/Library";
 import type { CaptionStrips } from "./captions";
-import type { Decisions, Edits, Segment, Voice, Word } from "./edl";
+import type { Decisions, Edits, Motion, Segment, TextStyle, Voice, Word } from "./edl";
 
 export interface Opened {
   source: string;
@@ -267,6 +267,7 @@ export interface StyleSettings {
 export interface Style {
   rules?: Rule[];
   settings?: StyleSettings;
+  motion?: Partial<Record<TextStyle, Motion>>; // Luke's default motion for each kind of graphic
 }
 
 export interface Suggestion {
@@ -426,4 +427,19 @@ export async function loadAssets(): Promise<Asset[]> {
 export async function saveAssets(assets: Asset[]): Promise<void> {
   if (!inApp) return localStorage.setItem("roughcut-assets", JSON.stringify(assets));
   return invoke("save_assets", { assets });
+}
+
+/** Makes this motion the default for new graphics of this kind (Luke's, and Claude's). */
+export async function setMotionDefault(style: TextStyle, motion: Motion): Promise<void> {
+  if (!inApp) {
+    const s: Style = JSON.parse(localStorage.getItem("roughcut-style") ?? "{}");
+    return localStorage.setItem("roughcut-style", JSON.stringify({ ...s, motion: { ...s.motion, [style]: motion } }));
+  }
+  return invoke("set_motion_default", { style, motion });
+}
+
+/** Copies an image into Luke's assets folder (so it stays put) and returns its new path. */
+export async function importImage(path: string): Promise<string> {
+  if (!inApp) return path;
+  return invoke<string>("import_image", { path });
 }

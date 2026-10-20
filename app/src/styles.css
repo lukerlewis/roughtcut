@@ -391,3 +391,7 @@ body.dragging-fx, body.dragging-fx * { cursor: grabbing !important; }
   padding: 0 4px; border-radius: 4px;
 }
 .tabs > button:not(.btn) { white-space: nowrap; }
+.library .tile .thumb { width: 22px; height: 22px; object-fit: contain; border-radius: 4px; }
+.library .add-image { margin-top: 6px; }
+.effect-sub { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-weight: 500; font-size: 12px; }
+.seg.wrap { flex-wrap: wrap; } .seg.wrap button { flex: 1 0 30%; }

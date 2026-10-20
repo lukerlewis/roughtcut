@@ -1,6 +1,7 @@
-import { Bookmark, Check, EyeOff, Film, Gauge, ImageIcon, LayoutPanelLeft, MessageSquare, Play, Send, Trash2, Type, User, X, ZoomIn } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bookmark, Check, EyeOff, Film, Gauge, ImageIcon, LayoutPanelLeft, MessageSquare, Play, Send, Trash2, Type, User, X, ZoomIn } from "lucide-react";
 import { useEffect, useState } from "react";
-import { TEXT_DEFAULTS, ZOOM_EASE, timecode, zoomSpan, type Background, type BlurFx, type Clip, type LayoutMode, type Rendered, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
+import { motionOf, partsOf } from "../lib/graphics";
+import { TEXT_DEFAULTS, ZOOM_EASE, type Direction, type Easing, type Motion, type MotionStep, timecode, zoomSpan, type Background, type BlurFx, type Clip, type LayoutMode, type Rendered, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
 
 export type Look = { scale: number; x: number; y: number };
 
@@ -29,6 +30,7 @@ interface Props {
   onRemove: () => void;
   onZoomEase: (ease: { easeIn?: number; easeOut?: number }) => void;
   onPreview: () => void; // play the effect from just before it
+  onMotionDefault: (style: TextStyle, motion: Motion) => void; // new graphics of this kind move like this
 }
 
 const STYLES: [TextStyle, string][] = [
@@ -57,16 +59,126 @@ function Field({ value, placeholder, onSave }: { value: string; placeholder: str
   );
 }
 
-function TextSettings({ t, onText, onKeep, onRemove, onSaveAsset }: { t: TextFx; onText: Props["onText"]; onKeep: () => void; onRemove: () => void; onSaveAsset: (t: TextFx) => void }) {
+const KINDS: [MotionStep["type"], string][] = [
+  ["none", "None"],
+  ["fade", "Fade"],
+  ["slide", "Slide"],
+  ["pop", "Pop"],
+];
+const EASES: [Easing, string, string][] = [
+  ["smooth", "Smooth", "Eases to a stop"],
+  ["snappy", "Snappy", "Fast, then settles"],
+  ["gentle", "Gentle", "Soft and even"],
+  ["overshoot", "Bouncy", "Goes a little past, then back"],
+  ["spring", "Springy", "A soft physical spring, like Remotion's"],
+  ["linear", "Linear", "Same speed throughout"],
+];
+const SIDES: [Direction, typeof ArrowLeft, string][] = [
+  ["left", ArrowLeft, "Left"],
+  ["right", ArrowRight, "Right"],
+  ["up", ArrowUp, "Top"],
+  ["down", ArrowDown, "Bottom"],
+];
+const PLURAL: Record<TextStyle, string> = { title: "titles", "lower-third": "lower thirds", callout: "callouts", image: "pictures" };
+
+/** How a graphic comes in and goes out: kind, side, distance, time, easing,
+ *  blur, and the stagger between its parts. Saved as one change per gesture. */
+function MotionSettings({ t, p }: { t: TextFx; p: Props }) {
+  const m = motionOf(t);
+  const [which, setWhich] = useState<"in" | "out">("in");
+  const [draft, setDraft] = useState<Motion | null>(null);
+  const shown = draft ?? m;
+  const step = shown[which];
+  const set = (patch: Partial<MotionStep>) => p.onText({ motion: { ...m, [which]: { ...m[which], ...patch } } });
+  const slide = (patch: Partial<MotionStep>) => setDraft({ ...shown, [which]: { ...step, ...patch } });
+  const commit = () => {
+    if (draft) p.onText({ motion: draft });
+    setDraft(null);
+  };
+  const range = (label: string, value: string, v: number, min: number, max: number, on: (v: number) => void) => (
+    <>
+      <label className="setting">
+        <span>{label}</span>
+        <span className="mono">{value}</span>
+      </label>
+      <input type="range" min={min} max={max} value={v} onChange={(e) => on(Number(e.target.value))} onPointerUp={commit} onKeyUp={commit} onBlur={commit} />
+    </>
+  );
+  return (
+    <>
+      <div className="effect-sub">Motion</div>
+      <div className="seg wide">
+        <button className={which === "in" ? "on" : ""} onClick={() => setWhich("in")}>
+          Coming in
+        </button>
+        <button className={which === "out" ? "on" : ""} onClick={() => setWhich("out")}>
+          Going out
+        </button>
+      </div>
+      <div className="seg wide">
+        {KINDS.map(([k, label]) => (
+          <button key={k} className={step.type === k ? "on" : ""} onClick={() => step.type !== k && set({ type: k, from: step.from ?? (which === "in" ? "down" : "up"), distance: step.distance ?? 0.05 })}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {step.type === "slide" && (
+        <>
+          <label className="setting">
+            <span>{which === "in" ? "From" : "Towards"}</span>
+          </label>
+          <div className="seg wide">
+            {SIDES.map(([d, Icon, label]) => (
+              <button key={d} className={(step.from ?? "left") === d ? "on" : ""} title={label} onClick={() => set({ from: d })}>
+                <Icon size={14} />
+              </button>
+            ))}
+          </div>
+          {range("Distance", (step.distance ?? 0.3) >= 1 ? "off screen" : `${Math.round((step.distance ?? 0.3) * 100)}%`, Math.round((step.distance ?? 0.3) * 100), 1, 100, (v) => slide({ distance: v / 100 }))}
+        </>
+      )}
+      {step.type !== "none" && (
+        <>
+          {range("Takes", `${step.duration.toFixed(2)}s`, Math.round(step.duration * 20), 1, 40, (v) => slide({ duration: v / 20 }))}
+          <label className="setting">
+            <span>Easing</span>
+          </label>
+          <div className="seg wide wrap">
+            {EASES.map(([e, label, tip]) => (
+              <button key={e} className={step.easing === e ? "on" : ""} title={tip} onClick={() => set({ easing: e })}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {range("Blur while moving", step.blur ? `${step.blur}px` : "none", step.blur ?? 0, 0, 24, (v) => slide({ blur: v }))}
+        </>
+      )}
+      {partsOf(t) > 1 && range("Stagger", `${shown.stagger.toFixed(2)}s`, Math.round(shown.stagger * 100), 0, 60, (v) => setDraft({ ...shown, stagger: v / 100 }))}
+      <div className="actions wrap">
+        <button className="btn ghost" onClick={p.onPreview}>
+          <Play size={14} /> Play it
+        </button>
+        <button className="btn" onClick={() => p.onMotionDefault(t.style, m)} title={`New ${PLURAL[t.style]} will move like this, and Claude will use it too`}>
+          Use for all {PLURAL[t.style]}
+        </button>
+      </div>
+    </>
+  );
+}
+
+function TextSettings({ t, p }: { t: TextFx; p: Props }) {
+  const { onText, onKeep, onRemove, onSaveAsset } = p;
+  const image = t.style === "image";
   const [size, setSize] = useState<number | null>(null);
   const commitSize = () => {
-    if (size !== null) onText({ size });
+    if (size !== null) onText(image ? { w: size } : { size });
     setSize(null);
   };
+  const shownSize = size ?? (image ? (t.w ?? 0.3) : t.size);
   return (
     <div className="panel-body effect">
       <div className="effect-head">
-        <Type size={15} /> <span>Text</span>
+        {image ? <ImageIcon size={15} /> : <Type size={15} />} <span>{image ? "Picture" : "Text"}</span>
         {t.status === "pending" && <span className="dot" title="Claude's, not reviewed yet" />}
       </div>
       <p className="why">
@@ -74,6 +186,8 @@ function TextSettings({ t, onText, onKeep, onRemove, onSaveAsset }: { t: TextFx;
           {timecode(t.start, 30, true)} to {timecode(t.end, 30, true)}
         </span>
       </p>
+      {!image && (
+      <>
       <div className="seg wide">
         {STYLES.map(([k, label]) => (
           <button key={k} className={t.style === k ? "on" : ""} onClick={() => t.style !== k && onText({ style: k, ...TEXT_DEFAULTS[k] })}>
@@ -93,32 +207,39 @@ function TextSettings({ t, onText, onKeep, onRemove, onSaveAsset }: { t: TextFx;
           <Field value={t.sub ?? ""} placeholder="Optional" onSave={(sub) => onText({ sub })} />
         </>
       )}
+      </>
+      )}
       <label className="setting">
-        <span>Size</span>
-        <span className="mono">{Math.round((size ?? t.size) * 1000) / 10}%</span>
+        <span>{image ? "Width" : "Size"}</span>
+        <span className="mono">{Math.round(shownSize * 1000) / 10}%</span>
       </label>
       <input
         type="range"
-        min={15}
-        max={160}
-        value={Math.round((size ?? t.size) * 1000)}
+        min={image ? 30 : 15}
+        max={image ? 1000 : 160}
+        value={Math.round(shownSize * 1000)}
         onChange={(e) => setSize(Number(e.target.value) / 1000)}
         onPointerUp={commitSize}
         onKeyUp={commitSize}
         onBlur={commitSize}
       />
-      <label className="setting">
-        <span>Look</span>
-      </label>
-      <div className="seg wide">
-        <button className={(t.look ?? "plain") === "plain" ? "on" : ""} onClick={() => onText({ look: "plain" })}>
-          Plain
-        </button>
-        <button className={t.look === "box" ? "on" : ""} onClick={() => onText({ look: "box" })}>
-          On a card
-        </button>
-      </div>
+      {!image && (
+        <>
+          <label className="setting">
+            <span>Look</span>
+          </label>
+          <div className="seg wide">
+            <button className={(t.look ?? "plain") === "plain" ? "on" : ""} onClick={() => onText({ look: "plain" })}>
+              Plain
+            </button>
+            <button className={t.look === "box" ? "on" : ""} onClick={() => onText({ look: "box" })}>
+              On a card
+            </button>
+          </div>
+        </>
+      )}
       <p className="hint">Drag it on the video to move it, or its ends on the timeline to change when it shows.</p>
+      <MotionSettings t={t} p={p} />
       <div className="actions">
         {t.status === "pending" && (
           <button className="btn" onClick={onKeep}>
@@ -129,7 +250,7 @@ function TextSettings({ t, onText, onKeep, onRemove, onSaveAsset }: { t: TextFx;
           <Bookmark size={14} /> Save as asset
         </button>
         <button className="btn ghost" onClick={onRemove}>
-          {t.status === "pending" ? <X size={14} /> : <Trash2 size={14} />} Remove text
+          {t.status === "pending" ? <X size={14} /> : <Trash2 size={14} />} Remove {image ? "picture" : "text"}
         </button>
       </div>
     </div>
@@ -463,7 +584,7 @@ export function Effect(p: Props) {
   if (p.speed) return <SpeedSettings x={p.speed} p={p} />;
   if (p.blur) return <BlurSettings x={p.blur} p={p} />;
   if (p.note) return <NoteSettings n={p.note} p={p} />;
-  if (p.text) return <TextSettings t={p.text} onText={p.onText} onKeep={p.onKeep} onRemove={p.onRemove} onSaveAsset={p.onSaveAsset} />;
+  if (p.text) return <TextSettings t={p.text} p={p} />;
   if (p.zoom) {
     const z = p.zoom;
     const look = p.look ?? { scale: z.scale, x: z.x, y: z.y };

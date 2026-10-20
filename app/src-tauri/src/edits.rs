@@ -187,6 +187,11 @@ pub fn add_text(e: &mut Edits, style: &str, text: &str, sub: Option<&str>, start
     if let Some(sub) = sub.filter(|s| !s.trim().is_empty()) {
         t["sub"] = Value::String(sub.into());
     }
+    // Moves the way Luke set as his default for this kind of graphic.
+    let motion = &crate::style::load()["motion"][style];
+    if motion.is_object() {
+        t["motion"] = motion.clone();
+    }
     texts(e).push(t);
     e.log.push(serde_json::json!({ "at": now(), "by": "agent", "op": "text", "note": format!("{style}: {text}") }));
 }

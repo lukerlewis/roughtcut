@@ -291,8 +291,29 @@ fn load_style() -> Value {
 }
 
 #[tauri::command]
-fn save_style(style: Value) -> Result<(), String> {
+fn save_style(mut style: Value) -> Result<(), String> {
+    // The Style tab doesn't edit motion defaults; keep the saved ones.
+    if style.get("motion").is_none() {
+        if let Some(m) = style::load().get("motion") {
+            style["motion"] = m.clone();
+        }
+    }
     style::save(&style)
+}
+
+#[tauri::command]
+fn set_motion_default(style: String, motion: Value) -> Result<(), String> {
+    let mut s = style::load();
+    if !s["motion"].is_object() {
+        s["motion"] = serde_json::json!({});
+    }
+    s["motion"][style] = motion;
+    style::save(&s)
+}
+
+#[tauri::command]
+fn import_image(path: String) -> Result<String, String> {
+    assets::import_image(Path::new(&path)).map(|p| p.to_string_lossy().to_string())
 }
 
 /// Rules Claude suggests from what Luke corrected in this project.
@@ -407,6 +428,8 @@ pub fn run() {
             save_edits,
             list_versions,
             load_assets,
+            set_motion_default,
+            import_image,
             save_assets,
             save_version,
             open_version,

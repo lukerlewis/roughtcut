@@ -1,30 +1,147 @@
-// Titles, lower thirds and callouts, drawn the same way for the viewer and
-// for the export, so what Luke sees is what he gets. The export receives
-// them as transparent full-frame PNGs over the times they show.
+// Titles, lower thirds, callouts and images, drawn the same way for the
+// viewer and for the export, so what Luke sees is what he gets. The export
+// receives them as transparent full-frame PNGs over the times they show.
+//
+// Each graphic comes in and goes out with its motion (fade, slide or pop,
+// with an easing), and its parts (a title, then its subtitle) can stagger.
 
 import type { CaptionStrips } from "./captions";
-import type { TextFx } from "./edl";
+import { MOTION_DEFAULTS, type Easing, type Motion, type MotionStep, type TextFx } from "./edl";
 
 const FONT = '"Geist", "Helvetica Neue", Helvetica, Arial, sans-serif';
-export const ANIM_IN = 0.35; // seconds to come in
-export const ANIM_OUT = 0.25; // seconds to go out
 
-const ease = (t: number) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
+// Ease-out curves (GSAP's power2.out, power4.out, sine.out and back.out(1.7)).
+// Coming in they run forwards; going out they run on the time left, so an
+// exit starts gently and speeds away, as an ease-in should.
+export const EASINGS: Record<Easing, (t: number) => number> = {
+  linear: (t) => t,
+  smooth: (t) => 1 - Math.pow(1 - t, 3),
+  snappy: (t) => 1 - Math.pow(1 - t, 5),
+  gentle: (t) => Math.sin((t * Math.PI) / 2),
+  overshoot: (t) => 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2),
+  spring: (t) => springAt(t * SPRING_SETTLE),
+};
 
-/** How far in (0..1) a text is at `t` seconds after it starts, lasting `length`. */
-export function presence(t: number, length: number): number {
-  if (t < 0 || t > length) return 0;
-  return Math.min(ease(t / ANIM_IN), ease((length - t) / ANIM_OUT));
+// Remotion's spring() (mass 1, stiffness 100; damping 12 rather than its
+// default 10, for one soft bounce of about 9%), solved in closed form and
+// stretched, as Remotion does with durationInFrames, so it settles exactly
+// when the step ends.
+const [MASS, STIFFNESS, DAMPING] = [1, 100, 12];
+function springAt(t: number): number {
+  const w0 = Math.sqrt(STIFFNESS / MASS);
+  const zeta = DAMPING / (2 * Math.sqrt(STIFFNESS * MASS));
+  const wd = w0 * Math.sqrt(1 - zeta * zeta);
+  return 1 - Math.exp(-zeta * w0 * t) * (Math.cos(wd * t) + ((zeta * w0) / wd) * Math.sin(wd * t));
+}
+// When it stays within 0.5% of rest for good (Remotion's measureSpring threshold).
+const SPRING_SETTLE = (() => {
+  let settled = 0;
+  for (let t = 0; t < 5; t += 0.001) if (Math.abs(1 - springAt(t)) > 0.005) settled = t;
+  return settled;
+})();
+
+export const motionOf = (t: TextFx): Motion => t.motion ?? MOTION_DEFAULTS[t.style];
+
+/** How many parts move separately (for staggering). */
+export const partsOf = (t: TextFx) => (t.style !== "image" && t.style !== "callout" && t.sub?.trim() ? 2 : 1);
+
+/** Where a part is in its motion: how visible, how far moved (fractions of
+ *  the frame) and how big. */
+interface State {
+  alpha: number;
+  dx: number;
+  dy: number;
+  scale: number;
+  blur?: number; // pixels at 1080p
 }
 
-/** Draws one text onto a width x height frame, `amount` of the way in. */
-export function drawText(g: CanvasRenderingContext2D, t: TextFx, width: number, height: number, amount: number) {
-  if (amount <= 0) return;
+const SHOWN: State = { alpha: 1, dx: 0, dy: 0, scale: 1 };
+
+function stepState(step: MotionStep, v: number): State {
+  // v: 0 hidden, 1 fully in (may pass 1 with an overshoot).
+  const c = Math.min(1, Math.max(0, v));
+  const s = moveState(step, v, c);
+  return step.blur ? { ...s, blur: step.blur * (1 - c) } : s;
+}
+
+function moveState(step: MotionStep, v: number, c: number): State {
+  if (step.type === "none") return v > 0 ? SHOWN : { ...SHOWN, alpha: 0 };
+  if (step.type === "fade") return { ...SHOWN, alpha: c };
+  if (step.type === "pop") return { alpha: c, dx: 0, dy: 0, scale: 0.85 + 0.15 * v };
+  const d = (step.distance ?? 0.3) * (1 - v);
+  const [dx, dy] = { left: [-d, 0], right: [d, 0], up: [0, -d], down: [0, d] }[step.from ?? "left"];
+  // A long slide comes in solid; a short nudge fades in as it moves.
+  return { alpha: (step.distance ?? 0.3) >= 0.4 ? (v > 0 ? 1 : 0) : c, dx, dy, scale: 1 };
+}
+
+/** Part k's state at `time` seconds into a graphic lasting `length`. */
+export function motionAt(m: Motion, parts: number, k: number, time: number, length: number): State {
+  if (time < 0 || time > length) return { ...SHOWN, alpha: 0 };
+  const into = time - k * m.stagger; // later parts start later
+  const left = length - time - (parts - 1 - k) * m.stagger; // and the first leaves first
+  if (into < 0) return { ...SHOWN, alpha: 0 };
+  if (m.in.duration > 0 && into < m.in.duration) return stepState(m.in, EASINGS[m.in.easing](into / m.in.duration));
+  if (left <= 0) return m.out.type === "none" && left > -1e-6 ? SHOWN : { ...SHOWN, alpha: 0 };
+  if (m.out.duration > 0 && left < m.out.duration) return stepState(m.out, EASINGS[m.out.easing](left / m.out.duration));
+  return SHOWN;
+}
+
+/** Seconds at the start and end of a graphic where it's moving. */
+export function moving(t: TextFx): [number, number] {
+  const m = motionOf(t);
+  const extra = (partsOf(t) - 1) * m.stagger;
+  return [m.in.duration + extra, m.out.duration + extra];
+}
+
+// Images, loaded once each. The app fills this before drawing or exporting.
+const images = new Map<string, HTMLImageElement>();
+
+/** Loads an image graphic's file (by the URL the app serves it at). */
+export function loadImage(src: string, url: string): Promise<void> {
+  if (images.get(src)?.complete) return Promise.resolve();
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous"; // so the export can read the canvas back
+    img.onload = () => resolve();
+    img.onerror = () => resolve();
+    img.src = url;
+    images.set(src, img);
+  });
+}
+
+/** Draws one graphic onto a width x height frame, each part in its state
+ *  (`part(k)`). */
+export function drawText(g: CanvasRenderingContext2D, t: TextFx, width: number, height: number, part: (k: number) => State) {
+  const s0 = part(0);
+  // Each part moves and fades on its own: set up the canvas for part k.
+  const use = (k: number, cx: number, cy: number) => {
+    const s = part(k);
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = Math.max(0, Math.min(1, s.alpha));
+    g.translate(s.dx * width + cx, s.dy * height + cy);
+    g.scale(s.scale, s.scale);
+    g.translate(-cx, -cy);
+    g.filter = s.blur && s.blur > 0.2 ? `blur(${((s.blur * height) / 1080).toFixed(2)}px)` : "none";
+    return s.alpha > 0;
+  };
   const size = t.size * height;
   const box = (t.look ?? "plain") === "box";
-  const rise = (1 - amount) * height * 0.02;
   g.save();
-  g.globalAlpha = amount;
+  if (t.style === "image") {
+    const img = t.src ? images.get(t.src) : undefined;
+    if (img?.complete && img.naturalWidth && use(0, t.x * width, t.y * height)) {
+      const w = (t.w ?? 0.3) * width;
+      const h = (w * img.naturalHeight) / img.naturalWidth;
+      g.drawImage(img, t.x * width - w / 2, t.y * height - h / 2, w, h);
+    }
+    g.restore();
+    return;
+  }
+  if (s0.alpha <= 0 && part(1).alpha <= 0) {
+    g.restore();
+    return;
+  }
+  use(0, t.x * width, t.y * height);
   g.textBaseline = "alphabetic";
   const fill = box ? "#121212" : "#fff";
   const shadow = () => {
@@ -45,7 +162,7 @@ export function drawText(g: CanvasRenderingContext2D, t: TextFx, width: number, 
     g.textAlign = "center";
     g.font = `700 ${size}px ${FONT}`;
     const cx = t.x * width;
-    const cy = t.y * height + rise;
+    const cy = t.y * height;
     const lines = wrap(g, t.text, width * 0.8);
     const lineH = size * 1.1;
     const top = cy - (lines.length * lineH) / 2 + size * 0.8;
@@ -62,12 +179,13 @@ export function drawText(g: CanvasRenderingContext2D, t: TextFx, width: number, 
     lines.forEach((l, i) => g.fillText(l, cx, top + i * lineH));
     if (sub) {
       g.font = `500 ${subSize}px ${FONT}`;
-      g.globalAlpha = amount * 0.85;
+      use(1, cx, cy);
+      g.globalAlpha *= 0.85;
       g.fillText(sub, cx, top + (lines.length - 1) * lineH + subSize * 1.6);
     }
   } else if (t.style === "lower-third") {
     g.textAlign = "left";
-    const x = t.x * width + (1 - amount) * -width * 0.02;
+    const x = t.x * width;
     const y = t.y * height;
     g.font = `700 ${size}px ${FONT}`;
     const w1 = g.measureText(t.text).width;
@@ -87,7 +205,8 @@ export function drawText(g: CanvasRenderingContext2D, t: TextFx, width: number, 
     g.fillText(t.text, x + (box ? padX : 0), y);
     if (sub) {
       g.font = `500 ${subSize}px ${FONT}`;
-      g.globalAlpha = amount * (box ? 0.7 : 0.85);
+      use(1, x, y);
+      g.globalAlpha *= box ? 0.7 : 0.85;
       g.fillText(sub, x + (box ? padX : 0), y + subSize * 1.35);
     }
   } else {
@@ -101,7 +220,7 @@ export function drawText(g: CanvasRenderingContext2D, t: TextFx, width: number, 
     g.shadowColor = "rgba(0,0,0,0.5)";
     g.shadowBlur = size * 0.2;
     g.beginPath();
-    g.arc(px, py, r * (0.6 + 0.4 * amount), 0, Math.PI * 2);
+    g.arc(px, py, r, 0, Math.PI * 2);
     g.stroke();
     const right = px < width * 0.7;
     const lx = px + (right ? 1 : -1) * size * 2.2;
@@ -154,13 +273,15 @@ export interface Placed {
 export function drawAt(g: CanvasRenderingContext2D, placed: Placed[], time: number, width: number, height: number) {
   for (const p of placed) {
     if (time < p.start || time > p.end) continue;
-    drawText(g, p.t, width, height, p.full ? 1 : presence(time - p.start, p.end - p.start));
+    const m = motionOf(p.t);
+    const parts = partsOf(p.t);
+    drawText(g, p.t, width, height, (k) => (p.full ? SHOWN : motionAt(m, parts, Math.min(k, parts - 1), time - p.start, p.end - p.start)));
   }
 }
 
 /** The export's graphics layer: a full-frame PNG for each stretch where the
- *  picture changes (every frame while something animates, one image while
- *  it holds still). */
+ *  picture changes (every frame while something moves, one image while it
+ *  holds still). */
 export async function graphicsLayer(placed: Placed[], width: number, height: number, fps: number): Promise<CaptionStrips | null> {
   if (!placed.length) return null;
   await document.fonts.load(`700 40px Geist`).catch(() => undefined);
@@ -174,11 +295,12 @@ export async function graphicsLayer(placed: Placed[], width: number, height: num
   const step = 1 / Math.max(1, Math.min(fps || 30, 60));
   const times = new Set<number>();
   for (const p of placed) {
+    const [a, b] = moving(p.t);
     times.add(p.start);
     times.add(p.end);
-    for (let t = p.start; t < Math.min(p.end, p.start + ANIM_IN); t += step) times.add(t);
-    for (let t = Math.max(p.start, p.end - ANIM_OUT); t < p.end; t += step) times.add(t);
-    times.add(Math.min(p.end, p.start + ANIM_IN));
+    for (let t = p.start; t < Math.min(p.end, p.start + a); t += step) times.add(t);
+    for (let t = Math.max(p.start, p.end - b); t < p.end; t += step) times.add(t);
+    times.add(Math.min(p.end, p.start + a));
   }
   const points = [...times].sort((a, b) => a - b);
   const frames: CaptionStrips["frames"] = [];
@@ -187,6 +309,7 @@ export async function graphicsLayer(placed: Placed[], width: number, height: num
     if (b - a < 1e-4) continue;
     const showing = placed.filter((p) => p.start < b && p.end > a);
     if (!showing.length) continue;
+    g.setTransform(1, 0, 0, 1, 0, 0);
     g.clearRect(0, 0, width, height);
     drawAt(g, showing, a + 1e-4, width, height);
     frames.push({ start: a, end: b, png: png() });

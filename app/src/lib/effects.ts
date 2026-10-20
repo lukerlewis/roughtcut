@@ -25,7 +25,7 @@ import {
 
 export const LAYOUT_NAMES = { camera: "Camera", screen: "Screen", side: "Side by side" } as const;
 
-const TEXT_NAMES = { title: "Title", "lower-third": "Lower third", callout: "Callout" } as const;
+const TEXT_NAMES = { title: "Title", "lower-third": "Lower third", callout: "Callout", image: "Picture" } as const;
 
 /** The effect tracks, top to bottom: Claude's clips, text, zooms. Empty ones are left out, except zooms. */
 export function effectTracks(e: Edits, words: Word[]): FxTrack[] {
@@ -51,7 +51,7 @@ export function effectTracks(e: Edits, words: Word[]): FxTrack[] {
   const texts: FxItem[] = (e.texts ?? []).flatMap((t, index) =>
     t.status === "restored"
       ? []
-      : [{ effect: { kind: "text", index }, start: t.start, end: t.end, label: `${TEXT_NAMES[t.style]}: ${t.text}`, pending: t.status === "pending", icon: "text" as const }],
+      : [{ effect: { kind: "text", index }, start: t.start, end: t.end, label: `${TEXT_NAMES[t.style]}: ${t.text}`, pending: t.status === "pending", icon: t.style === "image" ? ("image" as const) : ("text" as const) }],
   );
   if (texts.length) tracks.push({ name: "Text", items: texts });
   const speeds: FxItem[] = (e.speeds ?? []).flatMap((x, index) =>

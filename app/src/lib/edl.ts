@@ -798,7 +798,27 @@ export function zoomPointFor(scale: number, left: number, top: number) {
 
 // --- Text: titles, lower thirds and callouts ---------------------------------
 
-export type TextStyle = "title" | "lower-third" | "callout";
+export type TextStyle = "title" | "lower-third" | "callout" | "image";
+
+// --- Motion: how a graphic comes in and goes out -------------------------
+
+export type Easing = "linear" | "smooth" | "snappy" | "gentle" | "overshoot" | "spring";
+export type Direction = "left" | "right" | "up" | "down";
+
+export interface MotionStep {
+  type: "none" | "fade" | "slide" | "pop";
+  from?: Direction; // a slide: the side it comes in from (in) or leaves to (out)
+  distance?: number; // a slide: how far, as a fraction of the frame (1 is from off screen)
+  duration: number; // seconds
+  easing: Easing;
+  blur?: number; // pixels of blur (at 1080p) while it moves, which softens it in
+}
+
+export interface Motion {
+  in: MotionStep;
+  out: MotionStep;
+  stagger: number; // seconds between its parts (a title, then its subtitle)
+}
 
 /** Words on screen over source seconds start..end. x, y place it (0..1 of the
  *  frame): a title's centre, a lower third's left edge and baseline, the
@@ -813,6 +833,9 @@ export interface TextFx {
   y: number;
   size: number;
   look?: "plain" | "box"; // white text with a shadow, or dark text on a white box
+  src?: string; // an image: the file
+  w?: number; // an image: width as a fraction of the frame (x, y is its centre)
+  motion?: Motion; // how it comes in and goes out (else the style's default)
   by: "you" | "agent";
   status?: AgentStatus;
   reason?: string;
@@ -822,6 +845,26 @@ export const TEXT_DEFAULTS: Record<TextStyle, Pick<TextFx, "x" | "y" | "size" | 
   title: { x: 0.5, y: 0.45, size: 0.08, look: "plain" },
   "lower-third": { x: 0.06, y: 0.8, size: 0.045, look: "box" },
   callout: { x: 0.6, y: 0.4, size: 0.035, look: "box" },
+  image: { x: 0.5, y: 0.5, size: 0.3, look: "plain" },
+};
+
+/** How each kind of graphic moves unless Luke (or his style) says otherwise. */
+// Timings after HyperFrames' title cards and lower thirds: a strong ease out
+// on the way in, a shorter ease in on the way out, leaving in the direction
+// of travel, softened with a little blur, the second line a beat behind.
+export const MOTION_DEFAULTS: Record<TextStyle, Motion> = {
+  title: {
+    in: { type: "slide", from: "down", distance: 0.03, duration: 0.7, easing: "snappy", blur: 8 },
+    out: { type: "slide", from: "up", distance: 0.02, duration: 0.45, easing: "smooth", blur: 6 },
+    stagger: 0.2,
+  },
+  "lower-third": {
+    in: { type: "slide", from: "left", distance: 0.03, duration: 0.5, easing: "snappy", blur: 6 },
+    out: { type: "slide", from: "left", distance: 0.02, duration: 0.3, easing: "smooth", blur: 4 },
+    stagger: 0.08,
+  },
+  callout: { in: { type: "pop", duration: 0.42, easing: "overshoot" }, out: { type: "fade", duration: 0.25, easing: "smooth" }, stagger: 0 },
+  image: { in: { type: "pop", duration: 0.5, easing: "snappy", blur: 6 }, out: { type: "fade", duration: 0.3, easing: "smooth" }, stagger: 0 },
 };
 
 export function liveTexts(e: Edits): TextFx[] {
@@ -829,8 +872,8 @@ export function liveTexts(e: Edits): TextFx[] {
 }
 
 /** Luke adds text at source seconds start..end. */
-export function addText(e: Edits, style: TextStyle, text: string, start: number, end: number): Edits {
-  const t: TextFx = { style, text, start, end, ...TEXT_DEFAULTS[style], by: "you" };
+export function addText(e: Edits, style: TextStyle, text: string, start: number, end: number, motion?: Motion): Edits {
+  const t: TextFx = { style, text, start, end, ...TEXT_DEFAULTS[style], ...(motion ? { motion } : {}), by: "you" };
   return { ...e, texts: [...(e.texts ?? []), t], log: [...e.log, { at: now(), by: "you", op: "text", note: `${style}: ${text}` }] };
 }
 

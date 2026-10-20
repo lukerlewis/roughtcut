@@ -130,6 +130,13 @@ fn tools() -> Value {
                     "x": { "type": "number", "description": "Optional place across, 0..1 (a callout's spot; a title's centre; a lower third's left edge)." },
                     "y": { "type": "number", "description": "Optional place down, 0..1." },
                     "reason": { "type": "string", "description": "A few words on why, shown to Luke." },
+                    "motion": {
+                        "type": "object",
+                        "description": "Optional: how it comes in and goes out. Leave it out to use Luke's default for this kind of graphic (get_edit lists them). \
+                            {\"in\": step, \"out\": step, \"stagger\": seconds between title and subtitle}; a step is {\"type\": \"none\"|\"fade\"|\"slide\"|\"pop\", \
+                            \"from\": \"left\"|\"right\"|\"up\"|\"down\" (slides), \"distance\": 0.02..1 of the frame (1 is from off screen), \"duration\": seconds, \
+                            \"easing\": \"linear\"|\"smooth\"|\"snappy\"|\"gentle\"|\"overshoot\"|\"spring\"}.",
+                    },
                 })),
                 "required": ["style", "text", "from", "to", "reason"],
             },
@@ -284,9 +291,11 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
         "get_edit" => {
             let saved: Vec<String> = crate::versions::list(folder).iter().map(|v| format!("\"{}\" ({:.1}s)", v["name"].as_str().unwrap_or(""), v["length"].as_f64().unwrap_or(0.0))).collect();
             let versions = if saved.is_empty() { String::new() } else { format!("Saved versions: {}.\n", saved.join(", ")) };
+            let motion = &crate::style::load()["motion"];
+            let motion = if motion.as_object().is_some_and(|m| !m.is_empty()) { format!("Luke's default motion per graphic: {motion}\n") } else { String::new() };
             let assets = crate::assets::describe();
             let assets = if assets.is_empty() { String::new() } else { format!("Luke's assets (place with add_asset): {assets}.\n") };
-            Ok(describe(&words, &e, duration) + &versions + &assets)
+            Ok(describe(&words, &e, duration) + &versions + &assets + &motion)
         }
         "save_version" => {
             let name = args["name"].as_str().filter(|t| !t.trim().is_empty()).ok_or("Give the version a `name`.")?;
@@ -398,6 +407,11 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             // Hold it a little either side of the words.
             let (start, end) = ((words[a].start - 0.1).max(0.0), (words[b].end + 0.4).min(duration));
             edits::add_text(&mut e, style, text.trim(), args["sub"].as_str(), start, end, place, reason.trim());
+            if args["motion"].is_object() {
+                if let Some(t) = edits::texts(&mut e).last_mut() {
+                    t["motion"] = args["motion"].clone();
+                }
+            }
             edits::save(folder, &e)?;
             Ok(format!("Added a {style} \"{}\" over {a}-{b} ({start:.2}-{end:.2}s). Luke will see it in blue until he reviews it.", text.trim()))
         }
@@ -415,7 +429,7 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             let (start, end) = ((words[a].start - 0.1).max(0.0), (words[b].end + 0.4).min(duration));
             edits::add_text(&mut e, style, text.trim(), asset["sub"].as_str(), start, end, place, reason.trim());
             if let Some(t) = edits::texts(&mut e).last_mut() {
-                for key in ["size", "look"] {
+                for key in ["size", "look", "src", "w", "motion"] {
                     if !asset[key].is_null() {
                         t[key] = asset[key].clone();
                     }

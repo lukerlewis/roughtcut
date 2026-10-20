@@ -31,6 +31,24 @@ pub fn save(assets: &Value) -> Result<(), String> {
     fs::rename(&tmp, &p).map_err(|e| format!("Couldn't save your assets: {e}"))
 }
 
+/// Copies an image into the assets folder, so the asset keeps working if the
+/// original moves. Returns the copy's path.
+pub fn import_image(src: &std::path::Path) -> Result<PathBuf, String> {
+    let dir = path().with_file_name("assets");
+    fs::create_dir_all(&dir).map_err(|e| format!("Couldn't keep the image: {e}"))?;
+    let name = src.file_name().ok_or("That isn't a file.")?.to_string_lossy().to_string();
+    let mut dest = dir.join(&name);
+    let mut n = 2;
+    while dest.exists() {
+        let stem = std::path::Path::new(&name).file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let ext = std::path::Path::new(&name).extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+        dest = dir.join(format!("{stem} {n}{ext}"));
+        n += 1;
+    }
+    fs::copy(src, &dest).map_err(|e| format!("Couldn't keep the image: {e}"))?;
+    Ok(dest)
+}
+
 /// The asset called `name` (case doesn't matter).
 pub fn find(name: &str) -> Option<Value> {
     load().as_array()?.iter().find(|a| a["name"].as_str().map(|n| n.eq_ignore_ascii_case(name.trim())) == Some(true)).cloned()

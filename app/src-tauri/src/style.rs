@@ -127,6 +127,9 @@ pub fn corrections(folder: &Path) -> Result<String, String> {
             (Some("you"), _) => out += &format!("- Luke added a {what}.\n"),
             _ => {}
         }
+        if t["status"] != "restored" && t["motion"].is_object() {
+            out += &format!("- Luke's {what} moves like this: {}.\n", motion_words(&t["motion"]));
+        }
     }
     for n in e.other.get("notes").and_then(Value::as_array).into_iter().flatten() {
         if n["by"] == "you" {
@@ -134,6 +137,16 @@ pub fn corrections(folder: &Path) -> Result<String, String> {
         }
     }
     Ok(out)
+}
+
+/// "comes in: slide from left over 0.4s (snappy); goes out: fade over 0.25s (snappy); parts 0.08s apart"
+pub fn motion_words(m: &Value) -> String {
+    let step = |s: &Value| {
+        let kind = s["type"].as_str().unwrap_or("fade");
+        let from = if kind == "slide" { format!(" from {} ({:.0}% of the frame)", s["from"].as_str().unwrap_or("left"), s["distance"].as_f64().unwrap_or(0.3) * 100.0) } else { String::new() };
+        format!("{kind}{from} over {:.2}s ({})", s["duration"].as_f64().unwrap_or(0.3), s["easing"].as_str().unwrap_or("smooth"))
+    };
+    format!("comes in: {}; goes out: {}; parts {:.2}s apart", step(&m["in"]), step(&m["out"]), m["stagger"].as_f64().unwrap_or(0.0))
 }
 
 const SCHEMA: &str = r#"{"type":"object","properties":{"rules":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"},"why":{"type":"string"}},"required":["text","why"]}}},"required":["rules"]}"#;
@@ -152,7 +165,8 @@ pub fn suggest(folder: &Path) -> Result<Value, String> {
          His rules so far:\n{}\n\n\
          Suggest up to 4 new rules, in Luke's voice, that would have got these right the first time and will hold for his \
          other videos (\"Keep 'so' at the start of a sentence\", \"Never zoom in more than once in 10 seconds\"). Only suggest a \
-         rule a pattern in the corrections supports, never one he already has. Each `why` is one short sentence pointing at \
+         rule a pattern in the corrections supports, never one he already has. Rules can be about how graphics move \
+         (\"Lower thirds slide in from the left, snappy, about 0.4s\") when his choices show a pattern. Each `why` is one short sentence pointing at \
          the correction. If nothing is a pattern yet, return no rules.",
         if have.is_empty() { "(none)".to_string() } else { have.iter().map(|r| format!("- {r}")).collect::<Vec<_>>().join("\n") }
     );
