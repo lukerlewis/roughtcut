@@ -51,7 +51,7 @@ jobs:
           ditto -c -k --keepParent Roughcut.app Roughcut.zip
       # Roughcut's "Update" button installs the latest release (see src-tauri/src/update.rs).
       - name: Publish the build
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
