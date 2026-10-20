@@ -143,10 +143,17 @@ pub fn corrections(folder: &Path) -> Result<String, String> {
 pub fn motion_words(m: &Value) -> String {
     let step = |s: &Value| {
         let kind = s["type"].as_str().unwrap_or("fade");
-        let from = if kind == "slide" { format!(" from {} ({:.0}% of the frame)", s["from"].as_str().unwrap_or("left"), s["distance"].as_f64().unwrap_or(0.3) * 100.0) } else { String::new() };
-        format!("{kind}{from} over {:.2}s ({})", s["duration"].as_f64().unwrap_or(0.3), s["easing"].as_str().unwrap_or("smooth"))
+        let from = match kind {
+            "slide" => format!(" from {} ({:.0}% of the frame)", s["from"].as_str().unwrap_or("left"), s["distance"].as_f64().unwrap_or(0.3) * 100.0),
+            "reveal" => format!(" from {}", s["from"].as_str().unwrap_or("down")),
+            _ => String::new(),
+        };
+        let blur = s["blur"].as_f64().filter(|b| *b > 0.0).map(|b| format!(", {b:.0}px blur")).unwrap_or_default();
+        format!("{kind}{from} over {:.2}s ({}{blur})", s["duration"].as_f64().unwrap_or(0.3), s["easing"].as_str().unwrap_or("smooth"))
     };
-    format!("comes in: {}; goes out: {}; parts {:.2}s apart", step(&m["in"]), step(&m["out"]), m["stagger"].as_f64().unwrap_or(0.0))
+    let by = if m["by"].as_str() == Some("word") { "words" } else { "parts" };
+    let drift = m["drift"].as_f64().filter(|d| *d > 0.0).map(|d| format!("; grows {:.0}% while it holds", d * 100.0)).unwrap_or_default();
+    format!("comes in: {}; goes out: {}; {by} {:.2}s apart{drift}", step(&m["in"]), step(&m["out"]), m["stagger"].as_f64().unwrap_or(0.0))
 }
 
 const SCHEMA: &str = r#"{"type":"object","properties":{"rules":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"},"why":{"type":"string"}},"required":["text","why"]}}},"required":["rules"]}"#;

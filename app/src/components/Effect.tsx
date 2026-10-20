@@ -1,7 +1,7 @@
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bookmark, Check, EyeOff, Film, Gauge, ImageIcon, LayoutPanelLeft, MessageSquare, Play, Send, Trash2, Type, User, X, ZoomIn } from "lucide-react";
 import { useEffect, useState } from "react";
 import { motionOf, partsOf } from "../lib/graphics";
-import { TEXT_DEFAULTS, ZOOM_EASE, type Direction, type Easing, type Motion, type MotionStep, timecode, zoomSpan, type Background, type BlurFx, type Clip, type LayoutMode, type Rendered, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
+import { MOTION_DEFAULTS, TEXT_DEFAULTS, ZOOM_EASE, type Direction, type Easing, type Motion, type MotionStep, timecode, zoomSpan, type Background, type BlurFx, type Clip, type LayoutMode, type Rendered, type Note, type SpeedFx, type TextFx, type TextStyle, type Word, type Zoom } from "../lib/edl";
 
 export type Look = { scale: number; x: number; y: number };
 
@@ -64,6 +64,29 @@ const KINDS: [MotionStep["type"], string][] = [
   ["fade", "Fade"],
   ["slide", "Slide"],
   ["pop", "Pop"],
+  ["reveal", "Reveal"],
+];
+
+// Ready-made motion, after the looks HyperFrames and Remotion use: strong
+// ease outs coming in, quicker exits, blur while moving, words a beat apart.
+const PRESETS: [string, string, (style: TextStyle) => Motion][] = [
+  ["Clean", "The standard for this kind of graphic", (style) => MOTION_DEFAULTS[style]],
+  [
+    "Word by word",
+    "Each word rises out from behind its line",
+    () => ({ in: { type: "reveal", from: "down", duration: 0.6, easing: "snappy" }, out: { type: "fade", duration: 0.3, easing: "smooth", blur: 6 }, stagger: 0.06, by: "word" }),
+  ],
+  ["Spring", "Pops in on a soft spring", () => ({ in: { type: "pop", duration: 0.7, easing: "spring" }, out: { type: "fade", duration: 0.25, easing: "smooth" }, stagger: 0.1 })],
+  [
+    "Cinematic",
+    "A slow blurred fade, slowly growing while it holds",
+    () => ({ in: { type: "fade", duration: 1, easing: "gentle", blur: 14 }, out: { type: "fade", duration: 0.7, easing: "gentle", blur: 10 }, stagger: 0.3, drift: 0.04 }),
+  ],
+  [
+    "Across",
+    "Slides in from off screen and leaves the way it was going",
+    () => ({ in: { type: "slide", from: "left", distance: 1, duration: 0.6, easing: "snappy", blur: 10 }, out: { type: "slide", from: "right", distance: 1, duration: 0.5, easing: "smooth", blur: 10 }, stagger: 0.08 }),
+  ],
 ];
 const EASES: [Easing, string, string][] = [
   ["smooth", "Smooth", "Eases to a stop"],
@@ -85,6 +108,7 @@ const PLURAL: Record<TextStyle, string> = { title: "titles", "lower-third": "low
  *  blur, and the stagger between its parts. Saved as one change per gesture. */
 function MotionSettings({ t, p }: { t: TextFx; p: Props }) {
   const m = motionOf(t);
+  const words = t.style === "title" || t.style === "lower-third"; // can reveal, and go word by word
   const [which, setWhich] = useState<"in" | "out">("in");
   const [draft, setDraft] = useState<Motion | null>(null);
   const shown = draft ?? m;
@@ -107,6 +131,13 @@ function MotionSettings({ t, p }: { t: TextFx; p: Props }) {
   return (
     <>
       <div className="effect-sub">Motion</div>
+      <div className="actions wrap">
+        {PRESETS.map(([name, tip, make]) => (
+          <button key={name} className="btn" title={tip} onClick={() => p.onText({ motion: make(t.style) })}>
+            {name}
+          </button>
+        ))}
+      </div>
       <div className="seg wide">
         <button className={which === "in" ? "on" : ""} onClick={() => setWhich("in")}>
           Coming in
@@ -116,12 +147,27 @@ function MotionSettings({ t, p }: { t: TextFx; p: Props }) {
         </button>
       </div>
       <div className="seg wide">
-        {KINDS.map(([k, label]) => (
+        {KINDS.filter(([k]) => k !== "reveal" || words).map(([k, label]) => (
           <button key={k} className={step.type === k ? "on" : ""} onClick={() => step.type !== k && set({ type: k, from: step.from ?? (which === "in" ? "down" : "up"), distance: step.distance ?? 0.05 })}>
             {label}
           </button>
         ))}
       </div>
+      {step.type === "reveal" && (
+        <>
+          <label className="setting">
+            <span>{which === "in" ? "Rises" : "Leaves"}</span>
+          </label>
+          <div className="seg wide">
+            <button className={step.from !== "up" ? "on" : ""} onClick={() => set({ from: "down" })}>
+              {which === "in" ? "Up from below" : "Down"}
+            </button>
+            <button className={step.from === "up" ? "on" : ""} onClick={() => set({ from: "up" })}>
+              {which === "in" ? "Down from above" : "Up"}
+            </button>
+          </div>
+        </>
+      )}
       {step.type === "slide" && (
         <>
           <label className="setting">
@@ -153,7 +199,23 @@ function MotionSettings({ t, p }: { t: TextFx; p: Props }) {
           {range("Blur while moving", step.blur ? `${step.blur}px` : "none", step.blur ?? 0, 0, 24, (v) => slide({ blur: v }))}
         </>
       )}
-      {partsOf(t) > 1 && range("Stagger", `${shown.stagger.toFixed(2)}s`, Math.round(shown.stagger * 100), 0, 60, (v) => setDraft({ ...shown, stagger: v / 100 }))}
+      {words && (
+        <>
+          <label className="setting">
+            <span>Moves</span>
+          </label>
+          <div className="seg wide">
+            <button className={m.by !== "word" ? "on" : ""} onClick={() => p.onText({ motion: { ...m, by: "line" } })}>
+              Line by line
+            </button>
+            <button className={m.by === "word" ? "on" : ""} onClick={() => p.onText({ motion: { ...m, by: "word", stagger: m.by === "word" ? m.stagger : 0.06 } })}>
+              Word by word
+            </button>
+          </div>
+        </>
+      )}
+      {partsOf(t) > 1 && range(m.by === "word" ? "Between words" : "Stagger", `${shown.stagger.toFixed(2)}s`, Math.round(shown.stagger * 100), 0, 60, (v) => setDraft({ ...shown, stagger: v / 100 }))}
+      {range("Drift while it holds", shown.drift ? `${Math.round(shown.drift * 100)}%` : "none", Math.round((shown.drift ?? 0) * 100), 0, 15, (v) => setDraft({ ...shown, drift: v / 100 }))}
       <div className="actions wrap">
         <button className="btn ghost" onClick={p.onPreview}>
           <Play size={14} /> Play it

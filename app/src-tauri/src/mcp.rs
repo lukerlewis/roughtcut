@@ -133,9 +133,12 @@ fn tools() -> Value {
                     "motion": {
                         "type": "object",
                         "description": "Optional: how it comes in and goes out. Leave it out to use Luke's default for this kind of graphic (get_edit lists them). \
-                            {\"in\": step, \"out\": step, \"stagger\": seconds between title and subtitle}; a step is {\"type\": \"none\"|\"fade\"|\"slide\"|\"pop\", \
-                            \"from\": \"left\"|\"right\"|\"up\"|\"down\" (slides), \"distance\": 0.02..1 of the frame (1 is from off screen), \"duration\": seconds, \
-                            \"easing\": \"linear\"|\"smooth\"|\"snappy\"|\"gentle\"|\"overshoot\"|\"spring\"}.",
+                            {\"in\": step, \"out\": step, \"stagger\": seconds between parts, \"by\": \"line\"|\"word\" (titles and lower thirds: each word moves on its own, \
+                            stagger 0.04..0.08), \"drift\": 0..0.1 (grows slowly while it holds)}; a step is {\"type\": \"none\"|\"fade\"|\"slide\"|\"pop\"|\"reveal\" \
+                            (reveal: text rises out from behind its line), \"from\": \"left\"|\"right\"|\"up\"|\"down\" (slides; up or down for reveals), \
+                            \"distance\": 0.02..1 of the frame (1 is from off screen), \"duration\": seconds, \
+                            \"easing\": \"linear\"|\"smooth\"|\"snappy\"|\"gentle\"|\"overshoot\"|\"spring\", \"blur\": pixels while moving}. \
+                            Polished motion comes in with a strong ease out (snappy) and leaves quicker than it came.",
                     },
                 })),
                 "required": ["style", "text", "from", "to", "reason"],

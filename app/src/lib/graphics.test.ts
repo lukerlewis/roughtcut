@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EASINGS, motionAt, moving } from "./graphics";
+import { EASINGS, motionAt, moving, partsOf } from "./graphics";
 import { MOTION_DEFAULTS, type Motion, type TextFx } from "./edl";
 
 describe("easings", () => {
@@ -44,5 +44,22 @@ describe("motionAt", () => {
     const t = { style: "title", text: "A", sub: "B", motion: m } as TextFx;
     expect(moving(t)).toEqual([1.5, 1.5]);
     expect(moving({ style: "callout", text: "A" } as TextFx)).toEqual([MOTION_DEFAULTS.callout.in.duration, MOTION_DEFAULTS.callout.out.duration]);
+  });
+});
+
+describe("word by word and reveals", () => {
+  const words: Motion = { in: { type: "reveal", from: "down", duration: 0.6, easing: "linear" }, out: { type: "fade", duration: 0.3, easing: "linear" }, stagger: 0.06, by: "word" };
+  it("makes each word of a title a part, then the subtitle", () => {
+    expect(partsOf({ style: "title", text: "Three small words", sub: "and a sub", motion: words } as TextFx)).toBe(4);
+    expect(partsOf({ style: "title", text: "Three small words", motion: { ...words, by: "line" } } as TextFx)).toBe(1);
+    expect(partsOf({ style: "callout", text: "Three small words", motion: words } as TextFx)).toBe(1);
+  });
+  it("reveals from below its line, all the way in by the end", () => {
+    expect(motionAt(words, 1, 0, 0.3, 5).reveal).toBeCloseTo(0.5);
+    expect(motionAt({ ...words, in: { ...words.in, from: "up" } }, 1, 0, 0.3, 5).reveal).toBeCloseTo(-0.5);
+    expect(motionAt(words, 1, 0, 1, 5).reveal).toBeUndefined();
+  });
+  it("moves the whole time when it drifts", () => {
+    expect(moving({ style: "title", text: "A", start: 2, end: 6, motion: { ...words, drift: 0.04 } } as TextFx)).toEqual([4, 0]);
   });
 });

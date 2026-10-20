@@ -806,8 +806,8 @@ export type Easing = "linear" | "smooth" | "snappy" | "gentle" | "overshoot" | "
 export type Direction = "left" | "right" | "up" | "down";
 
 export interface MotionStep {
-  type: "none" | "fade" | "slide" | "pop";
-  from?: Direction; // a slide: the side it comes in from (in) or leaves to (out)
+  type: "none" | "fade" | "slide" | "pop" | "reveal"; // reveal: rises out from behind its own line, as if masked
+  from?: Direction; // a slide or reveal: the side it comes in from (in) or leaves to (out)
   distance?: number; // a slide: how far, as a fraction of the frame (1 is from off screen)
   duration: number; // seconds
   easing: Easing;
@@ -817,7 +817,9 @@ export interface MotionStep {
 export interface Motion {
   in: MotionStep;
   out: MotionStep;
-  stagger: number; // seconds between its parts (a title, then its subtitle)
+  stagger: number; // seconds between its parts (a title, then its subtitle; or each word)
+  by?: "line" | "word"; // what moves on its own: each line, or each word of the main text
+  drift?: number; // how much it slowly grows while it holds (0.03 is 3%), so it never sits dead still
 }
 
 /** Words on screen over source seconds start..end. x, y place it (0..1 of the

@@ -42,8 +42,15 @@ const SPRING_SETTLE = (() => {
 
 export const motionOf = (t: TextFx): Motion => t.motion ?? MOTION_DEFAULTS[t.style];
 
-/** How many parts move separately (for staggering). */
-export const partsOf = (t: TextFx) => (t.style !== "image" && t.style !== "callout" && t.sub?.trim() ? 2 : 1);
+const wordsOf = (text: string) => text.split(/\s+/).filter(Boolean);
+const byWord = (t: TextFx) => (t.style === "title" || t.style === "lower-third") && motionOf(t).by === "word";
+
+/** How many parts move separately (for staggering): the main text (or each
+ *  of its words), then the second line. */
+export const partsOf = (t: TextFx) => {
+  if (t.style === "image" || t.style === "callout") return 1;
+  return (byWord(t) ? Math.max(1, wordsOf(t.text).length) : 1) + (t.sub?.trim() ? 1 : 0);
+};
 
 /** Where a part is in its motion: how visible, how far moved (fractions of
  *  the frame) and how big. */
@@ -53,6 +60,7 @@ interface State {
   dy: number;
   scale: number;
   blur?: number; // pixels at 1080p
+  reveal?: number; // a masked reveal: how far it still sits behind its line (1 is fully hidden; negative is above)
 }
 
 const SHOWN: State = { alpha: 1, dx: 0, dy: 0, scale: 1 };
@@ -68,6 +76,10 @@ function moveState(step: MotionStep, v: number, c: number): State {
   if (step.type === "none") return v > 0 ? SHOWN : { ...SHOWN, alpha: 0 };
   if (step.type === "fade") return { ...SHOWN, alpha: c };
   if (step.type === "pop") return { alpha: c, dx: 0, dy: 0, scale: 0.85 + 0.15 * v };
+  if (step.type === "reveal") {
+    const side = step.from === "up" ? -1 : 1;
+    return { ...SHOWN, alpha: v > 0 ? 1 : 0, reveal: side * (1 - v) };
+  }
   const d = (step.distance ?? 0.3) * (1 - v);
   const [dx, dy] = { left: [-d, 0], right: [d, 0], up: [0, -d], down: [0, d] }[step.from ?? "left"];
   // A long slide comes in solid; a short nudge fades in as it moves.
@@ -90,6 +102,7 @@ export function motionAt(m: Motion, parts: number, k: number, time: number, leng
 export function moving(t: TextFx): [number, number] {
   const m = motionOf(t);
   const extra = (partsOf(t) - 1) * m.stagger;
+  if (m.drift) return [t.end - t.start, 0]; // it drifts the whole time
   return [m.in.duration + extra, m.out.duration + extra];
 }
 
@@ -111,12 +124,13 @@ export function loadImage(src: string, url: string): Promise<void> {
 
 /** Draws one graphic onto a width x height frame, each part in its state
  *  (`part(k)`). */
-export function drawText(g: CanvasRenderingContext2D, t: TextFx, width: number, height: number, part: (k: number) => State) {
-  const s0 = part(0);
+export function drawText(g: CanvasRenderingContext2D, t: TextFx, width: number, height: number, part: (k: number) => State, drift = 1) {
+  // The whole graphic grows slowly about its anchor while it holds.
+  const [ax, ay] = [t.x * width, t.y * height];
   // Each part moves and fades on its own: set up the canvas for part k.
   const use = (k: number, cx: number, cy: number) => {
     const s = part(k);
-    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.setTransform(drift, 0, 0, drift, ax * (1 - drift), ay * (1 - drift));
     g.globalAlpha = Math.max(0, Math.min(1, s.alpha));
     g.translate(s.dx * width + cx, s.dy * height + cy);
     g.scale(s.scale, s.scale);
@@ -137,11 +151,44 @@ export function drawText(g: CanvasRenderingContext2D, t: TextFx, width: number, 
     g.restore();
     return;
   }
-  if (s0.alpha <= 0 && part(1).alpha <= 0) {
+  if (Array.from({ length: partsOf(t) }, (_, k) => part(k)).every((s) => s.alpha <= 0)) {
     g.restore();
     return;
   }
   use(0, t.x * width, t.y * height);
+  // Draws one part's text at x, y (its baseline): moved by its state, and for
+  // a reveal, clipped to its own line so it rises out from behind it.
+  const say = (k: number, text: string, x: number, y: number, fontSize: number, fade = 1) => {
+    g.save();
+    if (!use(k, x, y - fontSize * 0.35)) return void g.restore();
+    g.globalAlpha *= fade;
+    const r = part(k).reveal;
+    if (r) {
+      const w = g.measureText(text).width;
+      const left = g.textAlign === "center" ? x - w / 2 : x;
+      g.beginPath();
+      g.rect(left - fontSize, y - fontSize * 1.05, w + fontSize * 2, fontSize * 1.4);
+      g.clip();
+      g.translate(0, r * fontSize * 1.4);
+    }
+    g.fillText(text, x, y);
+    g.restore();
+  };
+  // The main text, whole or word by word (parts 0..n-1), centred on cx or from x.
+  const sayLine = (line: string, first: number, x: number, y: number, fontSize: number, centre: boolean) => {
+    if (!byWord(t)) return say(0, line, x, y, fontSize);
+    const words = wordsOf(line);
+    const space = g.measureText(" ").width;
+    let at = centre ? x - g.measureText(words.join(" ")).width / 2 : x;
+    const align = g.textAlign;
+    g.textAlign = "left";
+    words.forEach((word, i) => {
+      say(first + i, word, at, y, fontSize);
+      at += g.measureText(word).width + space;
+    });
+    g.textAlign = align;
+  };
+  const mainParts = partsOf(t) - (t.sub?.trim() ? 1 : 0);
   g.textBaseline = "alphabetic";
   const fill = box ? "#121212" : "#fff";
   const shadow = () => {
@@ -176,12 +223,14 @@ export function drawText(g: CanvasRenderingContext2D, t: TextFx, width: number, 
     }
     shadow();
     g.fillStyle = fill;
-    lines.forEach((l, i) => g.fillText(l, cx, top + i * lineH));
+    let first = 0;
+    lines.forEach((l, i) => {
+      sayLine(l, first, cx, top + i * lineH, size, true);
+      first += wordsOf(l).length;
+    });
     if (sub) {
       g.font = `500 ${subSize}px ${FONT}`;
-      use(1, cx, cy);
-      g.globalAlpha *= 0.85;
-      g.fillText(sub, cx, top + (lines.length - 1) * lineH + subSize * 1.6);
+      say(mainParts, sub, cx, top + (lines.length - 1) * lineH + subSize * 1.6, subSize, 0.85);
     }
   } else if (t.style === "lower-third") {
     g.textAlign = "left";
@@ -202,12 +251,10 @@ export function drawText(g: CanvasRenderingContext2D, t: TextFx, width: number, 
     shadow();
     g.fillStyle = fill;
     g.font = `700 ${size}px ${FONT}`;
-    g.fillText(t.text, x + (box ? padX : 0), y);
+    sayLine(t.text, 0, x + (box ? padX : 0), y, size, false);
     if (sub) {
       g.font = `500 ${subSize}px ${FONT}`;
-      use(1, x, y);
-      g.globalAlpha *= box ? 0.7 : 0.85;
-      g.fillText(sub, x + (box ? padX : 0), y + subSize * 1.35);
+      say(mainParts, sub, x + (box ? padX : 0), y + subSize * 1.35, subSize, box ? 0.7 : 0.85);
     }
   } else {
     // Callout: a ring on the spot, a short line, and a label.
@@ -275,7 +322,8 @@ export function drawAt(g: CanvasRenderingContext2D, placed: Placed[], time: numb
     if (time < p.start || time > p.end) continue;
     const m = motionOf(p.t);
     const parts = partsOf(p.t);
-    drawText(g, p.t, width, height, (k) => (p.full ? SHOWN : motionAt(m, parts, Math.min(k, parts - 1), time - p.start, p.end - p.start)));
+    const drift = p.full || !m.drift ? 1 : 1 + m.drift * ((time - p.start) / Math.max(0.1, p.end - p.start));
+    drawText(g, p.t, width, height, (k) => (p.full ? SHOWN : motionAt(m, parts, Math.min(k, parts - 1), time - p.start, p.end - p.start)), drift);
   }
 }
 
