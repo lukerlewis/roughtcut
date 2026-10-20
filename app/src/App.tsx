@@ -1,4 +1,4 @@
-import { Captions as CaptionsIcon, Check, Download, FolderOpen, LayoutGrid, Pause, Play, Circle, Mic, Scissors, SkipBack, X } from "lucide-react";
+import { Captions as CaptionsIcon, Check, Download, FolderOpen, LayoutGrid, Pause, Play, Circle, Mic, Scissors, SkipBack } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
@@ -14,6 +14,7 @@ import { Effect, type Look } from "./components/Effect";
 import { Timeline, type Effect as Picked } from "./components/Timeline";
 import { Transcript, type Selection } from "./components/Transcript";
 import { Updates } from "./components/Updates";
+import { Projects } from "./components/Projects";
 import { Splitter } from "./components/Splitter";
 import * as backend from "./lib/backend";
 import { alignWords } from "./lib/align";
@@ -85,7 +86,7 @@ import {
 } from "./lib/edl";
 import { CutPlayer, type PlayerState } from "./lib/player";
 
-type Phase = { kind: "empty" } | { kind: "working"; log: string[]; source: string } | { kind: "ready" } | { kind: "error"; message: string };
+type Phase = { kind: "empty" } | { kind: "new" } | { kind: "working"; log: string[]; source: string } | { kind: "ready" } | { kind: "error"; message: string };
 
 interface Project {
   source: string;
@@ -122,16 +123,6 @@ function loadSizes(): Sizes {
   }
 }
 
-/** "just now", "5 minutes ago", "yesterday", "12 Oct", from Unix seconds. */
-export function ago(seconds: number, now = Date.now() / 1000): string {
-  const s = Math.max(0, now - seconds);
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)} minute${s < 120 ? "" : "s"} ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)} hour${s < 7200 ? "" : "s"} ago`;
-  if (s < 172800) return "yesterday";
-  if (s < 604800) return `${Math.floor(s / 86400)} days ago`;
-  return new Date(seconds * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
-}
 const stem = (path: string) => name(path).replace(/\.[^.]+$/, "");
 
 export default function App() {
@@ -219,7 +210,7 @@ export default function App() {
   useEffect(() => {
     if (!project) backend.recentProjects().then(setProjects, () => setProjects([]));
   }, [project]);
-  const forgetProject = (source: string) => backend.forgetProject(source).then(() => setProjects((all) => all.filter((p) => p.source !== source)));
+  const deleteProject = (source: string) => backend.deleteProject(source).then(() => setProjects((all) => all.filter((p) => p.source !== source)));
 
   useEffect(() => {
     const offs = [
@@ -1193,12 +1184,19 @@ export default function App() {
     return (
       <div className="app" style={{ gridTemplateRows: "44px 1fr" }}>
         <div className="toolbar" data-tauri-drag-region>
-          <span className="title">Roughcut</span>
+          {phase.kind === "empty" ? (
+            <span className="title">Roughcut</span>
+          ) : (
+            <button className="btn ghost" onClick={showProjects} disabled={phase.kind === "working"}>
+              <LayoutGrid size={16} /> Projects
+            </button>
+          )}
+          {phase.kind !== "empty" && <span className="title">{phase.kind === "working" ? name(phase.source) : "New project"}</span>}
           <span className="spacer" data-tauri-drag-region />
           <Updates />
         </div>
         <div
-          className="empty"
+          className={phase.kind === "empty" ? "home" : "empty"}
           onDragOver={(e) => (e.preventDefault(), setDragOver(true))}
           onDragLeave={() => setDragOver(false)}
           onDrop={(e) => (e.preventDefault(), setDragOver(false))}
@@ -1209,37 +1207,21 @@ export default function App() {
               <p>{name(phase.source)}</p>
               <div className="log">{phase.log.join("\n")}</div>
             </div>
+          ) : phase.kind === "empty" ? (
+            <Projects projects={projects} onOpen={open} onNew={() => setPhase({ kind: "new" })} onRecord={() => setRecording("open")} onDelete={deleteProject} />
           ) : (
             <div className={`drop ${dragOver ? "over" : ""}`}>
-              <h1>Drop a recording here</h1>
-              <p>It opens just as you recorded it. Cut it yourself, ask Claude, or click Rough cut when you want Claude's suggestions.</p>
+              <h1>New project</h1>
+              <p>Drop a recording here, choose one, or record a new one. It opens just as you recorded it.</p>
               <div className="actions">
                 <button className="btn primary" onClick={choose}>
-                  <FolderOpen size={16} /> Open recording…
+                  <FolderOpen size={16} /> Choose recording…
                 </button>
                 <button className="btn" onClick={() => setRecording("open")}>
                   <Circle size={16} /> Record
                 </button>
               </div>
               {phase.kind === "error" && <p className="error" style={{ marginTop: 16 }}>{phase.message}</p>}
-              {projects.length > 0 && (
-                <div className="projects">
-                  <h2>Projects</h2>
-                  {projects.map((p) => (
-                    <div key={p.source} className="project" onClick={() => open(p.source)} title={p.source}>
-                      <span className="project-name">{p.name}</span>
-                      <span className="project-when">{p.saved ? `Edited ${ago(p.saved)}` : `Opened ${ago(p.opened)}`}</span>
-                      <button
-                        className="btn ghost icon"
-                        title="Take off this list (the recording and its edits stay where they are)"
-                        onClick={(e) => (e.stopPropagation(), forgetProject(p.source))}
-                      >
-                        <X size={13} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           )}
         </div>

@@ -460,11 +460,11 @@ fn save_chat(folder: String, chat: Value) -> Result<(), String> {
     fs::rename(&tmp, dir.join("chat.json")).map_err(|e| e.to_string())
 }
 
-/// The recording to open at launch: one handed to the app, or else the
-/// project Luke had open last.
+/// A recording handed to the app at launch, if any (otherwise it opens on
+/// Luke's projects).
 #[tauri::command]
 fn launch_file(launch: tauri::State<Launch>) -> Option<String> {
-    launch.0.lock().unwrap().take().or_else(projects::last)
+    launch.0.lock().unwrap().take()
 }
 
 #[tauri::command]
@@ -472,9 +472,17 @@ fn recent_projects() -> Vec<Value> {
     projects::list()
 }
 
+/// Moves a project to the Trash (see projects::delete).
 #[tauri::command]
-fn forget_project(source: String) -> Result<(), String> {
-    projects::forget(&source)
+fn delete_project(source: String) -> Result<(), String> {
+    projects::delete(&source)
+}
+
+/// The project card's picture, as a URL the window can load.
+#[tauri::command]
+async fn project_thumbnail(server: tauri::State<'_, server::Server>, source: String) -> Result<String, String> {
+    let path = tauri::async_runtime::spawn_blocking(move || projects::thumbnail(Path::new(&source))).await.map_err(|e| e.to_string())??;
+    Ok(server.url(&path))
 }
 
 /// Quitting: the window saves what's on screen first ("save-now" with
@@ -683,7 +691,8 @@ pub fn run() {
             reveal,
             launch_file,
             recent_projects,
-            forget_project,
+            delete_project,
+            project_thumbnail,
             saved_for_quit,
             video_url,
             ask_claude,

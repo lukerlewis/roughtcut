@@ -204,7 +204,7 @@ async function mockClaude(_prompt: string) {
   }
 }
 
-/** A recording the app was opened with, or else the project open last time. */
+/** A recording the app was opened with, if any. */
 export async function launchFile(): Promise<string | null> {
   if (!inApp) return null;
   return invoke("launch_file");
@@ -230,9 +230,16 @@ export async function recentProjects(): Promise<ProjectInfo[]> {
   return invoke("recent_projects");
 }
 
-/** Takes a project off the list; its files stay where they are. */
-export async function forgetProject(source: string): Promise<void> {
-  if (inApp) await invoke("forget_project", { source });
+/** Moves a project to the Trash: a recording made in Roughcut with its whole
+ *  folder, or just the edits of a video from elsewhere (the video stays). */
+export async function deleteProject(source: string): Promise<void> {
+  if (inApp) await invoke("delete_project", { source });
+}
+
+/** A still from the recording for the project's card. */
+export async function projectThumbnail(source: string): Promise<string | null> {
+  if (!inApp) return null;
+  return invoke<string>("project_thumbnail", { source }).catch(() => null);
 }
 
 /** Tells the app everything is saved, so it can quit. */

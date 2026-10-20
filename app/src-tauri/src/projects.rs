@@ -81,9 +81,66 @@ pub fn forget(source: &str) -> Result<(), String> {
     write(&list)
 }
 
-/// The project to reopen on launch: the last one, if it's still there.
-pub fn last() -> Option<String> {
-    list().first().and_then(|p| p["source"].as_str().map(String::from))
+/// What deleting a project puts in the Trash: a recording made in Roughcut
+/// goes with its whole folder (its parts and edits); for a video from
+/// elsewhere only the edits go, and the video stays where Luke keeps it.
+pub fn deletable(source: &Path) -> PathBuf {
+    match crate::recorder::parts(source) {
+        Some((dir, _)) => dir,
+        None => crate::cut_folder(source),
+    }
+}
+
+/// Moves a project to the Trash, where Luke can still get it back, and takes
+/// it off the list.
+pub fn delete(source: &str) -> Result<(), String> {
+    let target = deletable(Path::new(source));
+    if target.exists() {
+        trash(&target)?;
+    }
+    forget(source)
+}
+
+#[cfg(target_os = "macos")]
+fn trash(path: &Path) -> Result<(), String> {
+    // Foundation's own "move to Trash" (as Finder does it, with Put Back),
+    // run through osascript so the app needs nothing extra.
+    const SCRIPT: &str = "function run(argv) { ObjC.import('Foundation');         const ok = $.NSFileManager.defaultManager.trashItemAtURLResultingItemURLError($.NSURL.fileURLWithPath(argv[0]), null, null);         if (!ok) throw new Error('not moved'); }";
+    let out = std::process::Command::new("/usr/bin/osascript").args(["-l", "JavaScript", "-e", SCRIPT]).arg(path).output().map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!("Couldn't move {} to the Trash.", path.display()))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn trash(path: &Path) -> Result<(), String> {
+    let bin = std::env::var_os("ROUGHCUT_TRASH").map(PathBuf::from).ok_or("No Trash here.")?;
+    fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
+    fs::rename(path, bin.join(path.file_name().unwrap_or_default())).map_err(|e| e.to_string())
+}
+
+/// A still from near the start of the recording, for the project's card.
+pub fn thumbnail(source: &Path) -> Result<PathBuf, String> {
+    let folder = crate::cut_folder(source);
+    let out = folder.join("thumbnail.jpg");
+    if out.is_file() {
+        return Ok(out);
+    }
+    fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    let status = std::process::Command::new(crate::tools::ffmpeg())
+        .args(["-v", "error", "-ss", "1", "-i"])
+        .arg(source)
+        .args(["-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "4", "-y"])
+        .arg(&out)
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() && out.is_file() {
+        Ok(out)
+    } else {
+        Err("No picture for this one.".into())
+    }
 }
 
 #[cfg(test)]
@@ -100,7 +157,6 @@ mod tests {
         fs::write(&a, "").unwrap();
         fs::write(&b, "").unwrap();
         assert!(list().is_empty());
-        assert_eq!(last(), None);
 
         remember(a.to_str().unwrap()).unwrap();
         remember(b.to_str().unwrap()).unwrap();
@@ -110,18 +166,25 @@ mod tests {
         assert_eq!(all[0]["name"], "a");
         assert_eq!(all[0]["folder"], d.join("a rough cut").to_str().unwrap());
         assert_eq!(all[0]["saved"], Value::Null);
-        assert_eq!(last().as_deref(), a.to_str());
 
-        // Saved edits show when they were saved; a moved recording drops off.
+        // Saved edits show when they were saved.
         fs::create_dir_all(d.join("a rough cut")).unwrap();
         fs::write(d.join("a rough cut/edits.json"), "{}").unwrap();
         assert!(list()[0]["saved"].as_u64().unwrap() > 0);
-        fs::remove_file(&a).unwrap();
-        assert_eq!(last().as_deref(), b.to_str());
 
-        forget(b.to_str().unwrap()).unwrap();
+        // Deleting a video from elsewhere bins its edits and keeps the video.
+        std::env::set_var("ROUGHCUT_TRASH", d.join("trash"));
+        delete(a.to_str().unwrap()).unwrap();
+        assert!(a.is_file());
+        assert!(!d.join("a rough cut").exists());
+        assert!(d.join("trash/a rough cut/edits.json").is_file());
+        assert_eq!(list().len(), 1);
+
+        // A moved recording drops off.
+        fs::remove_file(&b).unwrap();
         assert!(list().is_empty());
         std::env::remove_var("ROUGHCUT_PROJECTS");
+        std::env::remove_var("ROUGHCUT_TRASH");
         let _ = fs::remove_dir_all(&d);
     }
 }
