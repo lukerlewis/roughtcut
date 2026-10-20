@@ -96,19 +96,30 @@ export async function waveform(path: string, folder: string): Promise<Uint8Array
 }
 
 /** Renders the cut: the kept pieces (some zoomed) with the overlay layers (captions, titles) burned in. */
+/** A motion graphic for the export: rendered by HyperFrames, laid over the cut from `at` (cut seconds). */
+export interface ExportGraphic {
+  slug: string;
+  at: number;
+  x: number;
+  y: number;
+  scale: number;
+}
+
 export async function exportCut(
   source: string,
   segments: Segment[],
   overlays: CaptionStrips[],
   voice: Voice,
   dest: string,
+  folder?: string,
+  graphics: ExportGraphic[] = [],
 ): Promise<void> {
   if (!inApp) {
-    (window as any).__lastExport = { source, segments, overlays: overlays.map((o) => ({ top: o.top, frames: o.frames.length })), voice, dest };
+    (window as any).__lastExport = { source, segments, overlays: overlays.map((o) => ({ top: o.top, frames: o.frames.length })), voice, dest, graphics };
     await new Promise((r) => setTimeout(r, 400));
     return;
   }
-  return invoke("export", { source, segments, overlays, voice, dest });
+  return invoke("export", { source, segments, overlays, voice, dest, folder, graphics });
 }
 
 // --- Claude in the sidebar -------------------------------------------------
@@ -300,6 +311,24 @@ export async function saveStyle(style: Style): Promise<void> {
 }
 
 /** Claude reads what Luke corrected in this video and suggests rules. Uses his plan. */
+/** "Suggest graphics", first pass: the moments Claude thinks want a graphic
+ *  (from the transcript alone), and the request that builds them. */
+export interface Moment {
+  from: number;
+  to: number;
+  catalog: string;
+  idea: string;
+  why: string;
+}
+export async function spotGraphics(folder: string): Promise<{ moments: Moment[]; prompt: string }> {
+  if (!inApp) {
+    await new Promise((r) => setTimeout(r, 600));
+    const moments = [{ from: 4, to: 8, catalog: "lt-clean-bar", idea: "Luke Lewis, creator", why: "Introduces him." }];
+    return { moments, prompt: `Add these motion graphics: ${JSON.stringify(moments)}` };
+  }
+  return invoke("spot_graphics", { folder });
+}
+
 export async function suggestRules(folder: string): Promise<Suggestion[]> {
   if (!inApp) {
     await new Promise((r) => setTimeout(r, 600));
@@ -470,6 +499,19 @@ export interface CatalogGraphic {
   height: number;
   params: { key?: string; id?: string; label: string; type: string; default: string | number; min?: number; max?: number; step?: number }[];
   poster?: string;
+  values?: Record<string, string | number>; // Luke's own: the settings he saved it with
+  texts?: Record<string, string>; // and its words
+}
+
+/** Keeps a graphic from this project as one of Luke's ("Yours" in the Library). Returns its catalogue name. */
+export async function saveGraphicTemplate(folder: string, slug: string, info: Omit<CatalogGraphic, "name" | "group" | "description">): Promise<string> {
+  if (!inApp) return `mine/${slug}`;
+  return invoke("save_graphic_template", { folder, slug, info });
+}
+
+export async function forgetGraphicTemplate(name: string): Promise<void> {
+  if (!inApp) return;
+  return invoke("forget_graphic_template", { name });
 }
 
 /** The motion graphics that ship with the app (from HyperFrames' catalogue). */

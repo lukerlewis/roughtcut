@@ -60,6 +60,7 @@ export function Library(p: {
   onAddImage: () => void;
   imageUrl: (src: string) => string | undefined; // for thumbnails
   catalog: CatalogGraphic[];
+  onForgetGraphic: (name: string) => void; // one of Luke's saved graphics
 }) {
   const ghost = useRef<HTMLDivElement | null>(null);
   const [find, setFind] = useState("");
@@ -153,6 +154,11 @@ export function Library(p: {
                       {g.poster ? <img src={g.poster} alt="" draggable={false} loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} /> : null}
                     </div>
                     <span className="label">{g.title}</span>
+                    {g.group === "Yours" && (
+                      <button className="btn ghost icon remove" title="Forget this graphic" onPointerDown={(e) => e.stopPropagation()} onClick={() => p.onForgetGraphic(g.name)}>
+                        <X size={12} />
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

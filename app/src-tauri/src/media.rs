@@ -245,7 +245,32 @@ impl Voice {
     }
 }
 
-pub fn concat_graph(segments: &[Segment], inputs: &[std::path::PathBuf], width: u32, height: u32, fps: f64, overlays: &[f64], voice: Voice) -> String {
+/// A movie with transparency laid over the cut (a motion graphic), already
+/// sized and placed in the recording's pixels. `at` is in cut seconds.
+pub struct Movie {
+    pub file: std::path::PathBuf,
+    pub at: f64,
+    pub width: u32,
+    pub height: u32,
+    pub left: i64,
+    pub top: i64,
+}
+
+impl Movie {
+    /// Fits a `w`x`h` movie in a `width`x`height` frame as the viewer does:
+    /// scaled to fit times `scale`, its centre moved by x, y (fractions).
+    pub fn placed(file: std::path::PathBuf, at: f64, (w, h): (u32, u32), (width, height): (u32, u32), x: f64, y: f64, scale: f64) -> Movie {
+        let fit = (width as f64 / w.max(1) as f64).min(height as f64 / h.max(1) as f64) * scale;
+        let even = |v: f64| ((v / 2.0).round() as u32 * 2).max(2);
+        let (sw, sh) = (even(w as f64 * fit), even(h as f64 * fit));
+        let left = (width as f64 / 2.0 + x * width as f64 - sw as f64 / 2.0).round() as i64;
+        let top = (height as f64 / 2.0 + y * height as f64 - sh as f64 / 2.0).round() as i64;
+        Movie { file, at, width: sw, height: sh, left, top }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn concat_graph(segments: &[Segment], inputs: &[std::path::PathBuf], width: u32, height: u32, fps: f64, overlays: &[f64], movies: &[Movie], voice: Voice) -> String {
     let mut g = String::new();
     for (i, s) in segments.iter().enumerate() {
         let (a, b) = (s.start, s.end);
@@ -288,14 +313,25 @@ pub fn concat_graph(segments: &[Segment], inputs: &[std::path::PathBuf], width: 
     let polish = voice.filter();
     let a = if polish.is_empty() { "a" } else { "araw" };
     let tail = if polish.is_empty() { String::new() } else { format!(";[araw]{polish},aresample=48000[a]") };
-    if overlays.is_empty() {
+    let steps = movies.len() + overlays.len();
+    if steps == 0 {
         return g + &format!("concat=n={n}:v=1:a=1[v][{a}]") + &tail;
     }
     g += &format!("concat=n={n}:v=1:a=1[o0][{a}]");
-    for (k, top) in overlays.iter().enumerate() {
-        let c = inputs.len() + k; // overlay layers come in after the recording and clips
-        let out = if k + 1 == overlays.len() { "v".to_string() } else { format!("o{}", k + 1) };
-        g += &format!(";[{c}:v]format=rgba[l{k}];[o{k}][l{k}]overlay=x=0:y=main_h*{top:.4}:eof_action=pass:format=auto[{out}]");
+    let out = |k: usize| if k + 1 == steps { "v".to_string() } else { format!("o{}", k + 1) };
+    // Motion graphics first, so captions and titles sit on top of them. Each
+    // waits, see-through, until its moment, and is gone once it ends.
+    for (j, m) in movies.iter().enumerate() {
+        let c = inputs.len() + overlays.len() + j; // movies come in after the overlay layers
+        g += &format!(
+            ";[{c}:v]setpts=PTS-STARTPTS,format=rgba,scale={}:{},tpad=start_duration={:.4}:color=0x00000000[m{j}];[o{j}][m{j}]overlay=x={}:y={}:eof_action=pass:format=auto[{}]",
+            m.width, m.height, m.at.max(0.0), m.left, m.top, out(j)
+        );
+    }
+    for (i, top) in overlays.iter().enumerate() {
+        let k = movies.len() + i;
+        let c = inputs.len() + i; // overlay layers come in after the recording and clips
+        g += &format!(";[{c}:v]format=rgba[l{i}];[o{k}][l{i}]overlay=x=0:y=main_h*{top:.4}:eof_action=pass:format=auto[{}]", out(k));
     }
     g + &tail
 }
@@ -350,7 +386,7 @@ fn base64(text: &str) -> Vec<u8> {
 /// Renders the cut at full quality. Calls `progress` with 0..1 as it goes.
 /// Tries the Mac's hardware encoder first and falls back to x264, so a
 /// machine (or FFmpeg build) without it still exports.
-pub fn export(source: &Path, segments: &[Segment], overlays: &[Captions], voice: Voice, dest: &Path, progress: impl Fn(f64)) -> Result<(), String> {
+pub fn export(source: &Path, segments: &[Segment], overlays: &[Captions], movies: &[Movie], voice: Voice, dest: &Path, progress: impl Fn(f64)) -> Result<(), String> {
     if segments.is_empty() {
         return Err("Nothing is kept, so there's nothing to export.".into());
     }
@@ -365,7 +401,7 @@ pub fn export(source: &Path, segments: &[Segment], overlays: &[Captions], voice:
     }
     let files = inputs(source, segments);
     let tops: Vec<f64> = layers.iter().map(|c| c.top).collect();
-    let graph = concat_graph(segments, &files, info.width, info.height, info.fps, &tops, voice);
+    let graph = concat_graph(segments, &files, info.width, info.height, info.fps, &tops, movies, voice);
     let lists: Vec<std::path::PathBuf> = caps.iter().map(|d| d.join("list.ffconcat")).collect();
     let mut encoders: Vec<Vec<&str>> = Vec::new();
     if cfg!(target_os = "macos") {
@@ -374,7 +410,7 @@ pub fn export(source: &Path, segments: &[Segment], overlays: &[Captions], voice:
     encoders.push(vec!["-c:v", "libx264", "-preset", "medium", "-crf", "18"]);
     let mut result = Err(String::new());
     for video in &encoders {
-        result = encode(&files, &lists, &graph, total, dest, video, &progress);
+        result = encode(&files, &lists, movies, &graph, total, dest, video, &progress);
         if result.is_ok() {
             break;
         }
@@ -408,7 +444,8 @@ fn write_captions(c: &Captions, total: f64, layer: usize) -> std::io::Result<std
     Ok(dir)
 }
 
-fn encode(files: &[std::path::PathBuf], overlays: &[std::path::PathBuf], graph: &str, total: f64, dest: &Path, video: &[&str], progress: &impl Fn(f64)) -> Result<(), String> {
+#[allow(clippy::too_many_arguments)]
+fn encode(files: &[std::path::PathBuf], overlays: &[std::path::PathBuf], movies: &[Movie], graph: &str, total: f64, dest: &Path, video: &[&str], progress: &impl Fn(f64)) -> Result<(), String> {
     let mut cmd = tools::command(tools::ffmpeg());
     cmd.args(["-v", "error", "-y"]);
     for f in files {
@@ -416,6 +453,9 @@ fn encode(files: &[std::path::PathBuf], overlays: &[std::path::PathBuf], graph: 
     }
     for list in overlays {
         cmd.args(["-f", "concat", "-safe", "0", "-i"]).arg(list);
+    }
+    for m in movies {
+        cmd.arg("-i").arg(&m.file);
     }
     let mut child = cmd
         .arg("-filter_complex")
@@ -456,18 +496,26 @@ mod tests {
             Segment { start: 4.0, end: 6.0, zoom: Some(Zoom { scale: 1.5, x: 0.5, y: 0.4, ..Default::default() }), file: None, speed: None, blur: vec![] },
         ];
         let files = inputs(Path::new("/r.mov"), &segs);
-        let g = concat_graph(&segs, &files, 1920, 1080, 30.0, &[], Voice::default());
+        let g = concat_graph(&segs, &files, 1920, 1080, 30.0, &[], &[], Voice::default());
         assert!(g.contains("[0:v]trim=1.0000:2.5000,setpts=PTS-STARTPTS,setsar=1[v0]"));
         assert!(g.contains("crop=w=iw/1.5:h=ih/1.5:x=(iw-iw/1.5)*0.5:y=(ih-ih/1.5)*0.4,scale=1920:1080"));
         assert!(g.contains("[0:a]atrim=4.0000:6.0000"));
         assert!(g.ends_with("[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"));
-        let polished = concat_graph(&segs, &files, 1920, 1080, 30.0, &[], Voice { level: true, clean: false });
+        let polished = concat_graph(&segs, &files, 1920, 1080, 30.0, &[], &[], Voice { level: true, clean: false });
         assert!(polished.ends_with("[v][araw];[araw]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[a]"), "{polished}");
-        let g = concat_graph(&segs, &files, 1920, 1080, 30.0, &[0.6, 0.0], Voice::default());
+        let g = concat_graph(&segs, &files, 1920, 1080, 30.0, &[0.6, 0.0], &[], Voice::default());
         assert!(g.ends_with(
             "concat=n=2:v=1:a=1[o0][a];[1:v]format=rgba[l0];[o0][l0]overlay=x=0:y=main_h*0.6000:eof_action=pass:format=auto[o1];\
              [2:v]format=rgba[l1];[o1][l1]overlay=x=0:y=main_h*0.0000:eof_action=pass:format=auto[v]"
         ));
+        // A graphic under the titles: placed as the viewer places it.
+        let m = Movie::placed("/g.mov".into(), 2.5, (1920, 1080), (1280, 720), 0.1, 0.0, 0.5);
+        assert_eq!((m.width, m.height, m.left, m.top), (640, 360, 448, 180));
+        let g = concat_graph(&segs, &files, 1280, 720, 30.0, &[0.0], &[m], Voice::default());
+        assert!(g.ends_with(
+            "concat=n=2:v=1:a=1[o0][a];[2:v]setpts=PTS-STARTPTS,format=rgba,scale=640:360,tpad=start_duration=2.5000:color=0x00000000[m0];\
+             [o0][m0]overlay=x=448:y=180:eof_action=pass:format=auto[o1];[1:v]format=rgba[l0];[o1][l0]overlay=x=0:y=main_h*0.0000:eof_action=pass:format=auto[v]"
+        ), "{g}");
         assert_eq!(atempo(3.0), ",atempo=2.0,atempo=1.5000");
         assert_eq!(atempo(1.0), "");
     }
@@ -523,11 +571,31 @@ mod tests {
             frames: vec![CaptionFrame { start: 0.2, end: 1.0, png: png.into() }, CaptionFrame { start: 1.5, end: 2.0, png: png.into() }],
         };
         let titles = Captions { top: 0.0, blank: png.into(), frames: vec![CaptionFrame { start: 0.0, end: 1.0, png: png.into() }] };
-        export(&src, &segs, &[captions, titles], Voice { level: true, clean: true }, &dest, |p| seen.set(p)).unwrap();
+        // A motion graphic: half-transparent green over the middle second, as HyperFrames makes them (ProRes 4444).
+        let graphic = tools::command(tools::ffmpeg())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=0x00ff0080:size=640x360:rate=30,format=rgba", "-t", "1"])
+            .args(["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le"])
+            .arg(dir.join("graphic.mov"))
+            .status();
+        assert!(graphic.is_ok_and(|s| s.success()));
+        let movie = Movie::placed(dir.join("graphic.mov"), 1.5, (640, 360), (320, 240), 0.0, 0.0, 1.0);
+        export(&src, &segs, &[captions, titles], &[movie], Voice { level: true, clean: true }, &dest, |p| seen.set(p)).unwrap();
         let got = probe(&dest).unwrap();
         assert!((got.duration - 3.5).abs() < 0.15, "{}", got.duration);
         assert_eq!((got.width, got.height), (320, 240));
         assert_eq!(seen.get(), 1.0);
+        // Green only while the graphic shows.
+        let green_at = |t: f64| {
+            let out = tools::command(tools::ffmpeg())
+                .args(["-v", "error", "-ss", &t.to_string(), "-i"])
+                .arg(&dest)
+                .args(["-frames:v", "1", "-vf", "crop=8:8:156:116", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+                .output()
+                .unwrap()
+                .stdout;
+            out.chunks(3).filter(|p| p[1] > 120 && p[0] < 140 && p[2] < 140).count() > 32
+        };
+        assert!(!green_at(0.5) && green_at(2.0) && !green_at(3.2));
         fs::remove_dir_all(&dir).ok();
     }
 

@@ -28,8 +28,11 @@ const PICKS = [
   ["snow", "Overlays"], ["starfield", "Overlays"], ["camcorder-hud", "Overlays"], ["editorial-flash-overlay", "Overlays"], ["organic-light-leak-overlay", "Overlays"],
 ];
 
+// GUIDE.md is Roughcut's own (written by hand from HyperFrames' agent rules): keep it.
+const guide = existsSync(join(out, "GUIDE.md")) ? readFileSync(join(out, "GUIDE.md")) : null;
 rmSync(out, { recursive: true, force: true });
 mkdirSync(join(out, "lib"), { recursive: true });
+if (guide) writeFileSync(join(out, "GUIDE.md"), guide);
 cpSync(join(gsap, "dist", "gsap.min.js"), join(out, "lib", "gsap.min.js"));
 cpSync(join(core, "dist", "hyperframe.runtime.iife.js"), join(out, "lib", "hyperframes-runtime.js"));
 cpSync(join(repo, "LICENSE"), join(out, "LICENSE-hyperframes.txt"));

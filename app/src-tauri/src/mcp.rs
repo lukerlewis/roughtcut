@@ -5,6 +5,7 @@
 //! when Claude's turn reports a tool result.
 
 use crate::edits::{self, Kind};
+use crate::graphics;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -270,6 +271,65 @@ fn tools() -> Value {
             },
         },
         {
+            "name": "list_graphics",
+            "description": "The motion graphics you can place with add_graphic: Luke's own (group Yours, prefer these when they fit), then the catalogue (lower thirds, titles, numbers and charts, lists, code, app cards, overlays), and Luke's brand. With `name`, one graphic's words and settings, to fill it in.",
+            "inputSchema": { "type": "object", "properties": { "name": { "type": "string", "description": "A catalogue graphic's name." } } },
+        },
+        {
+            "name": "graphics_guide",
+            "description": "How to write a new motion graphic (a HyperFrames composition: HTML with a paused GSAP timeline) in Luke's brand. Read it before passing `html` to add_graphic or update_graphic.",
+            "inputSchema": { "type": "object", "properties": {} },
+        },
+        {
+            "name": "add_graphic",
+            "description": "Put a motion graphic over words from..to: a catalogue one (`catalog`, filled in with `texts` and `params`), or a new one you wrote (`html`, after reading graphics_guide). It plays in Luke's brand and shows to him as your unreviewed graphic; he can change its words, settings, size and place, and drag it on the timeline.",
+            "inputSchema": {
+                "type": "object",
+                "properties": range(json!({
+                    "catalog": { "type": "string", "description": "A catalogue graphic's name (list_graphics)." },
+                    "html": { "type": "string", "description": "A whole composition you wrote, instead of `catalog`." },
+                    "name": { "type": "string", "description": "A few words naming it, e.g. \"30 days stat\". Needed with `html`." },
+                    "texts": { "type": "object", "description": "Words to replace, old -> new, as list_graphics shows them.", "additionalProperties": { "type": "string" } },
+                    "params": { "type": "object", "description": "Settings, key -> value, as list_graphics shows them." },
+                    "seconds": { "type": "number", "description": "Optional length; by default it runs over the words (at least 2s)." },
+                    "x": { "type": "number", "description": "Optional shift across, -0.5..0.5 of the frame." },
+                    "y": { "type": "number", "description": "Optional shift down, -0.5..0.5 of the frame." },
+                    "scale": { "type": "number", "description": "Optional size, 0.2..2 (1 fits the frame)." },
+                    "reason": { "type": "string", "description": "A few words on why, shown to Luke." },
+                })),
+                "required": ["from", "to", "reason"],
+            },
+        },
+        {
+            "name": "get_graphic",
+            "description": "One graphic on the timeline (its number from get_edit): its times, settings and the composition's HTML.",
+            "inputSchema": { "type": "object", "properties": { "graphic": { "type": "integer" } }, "required": ["graphic"] },
+        },
+        {
+            "name": "update_graphic",
+            "description": "Change a graphic on the timeline when Luke asks: its words (`texts`, old -> new), settings (`params`), the whole composition (`html`, keeping what he didn't ask to change), its words from..to, or its place and size.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "graphic": { "type": "integer", "description": "Its number from get_edit." },
+                    "html": { "type": "string" },
+                    "texts": { "type": "object", "additionalProperties": { "type": "string" } },
+                    "params": { "type": "object", "description": "key -> value; null resets one." },
+                    "from": { "type": "integer" },
+                    "to": { "type": "integer" },
+                    "x": { "type": "number" },
+                    "y": { "type": "number" },
+                    "scale": { "type": "number" },
+                },
+                "required": ["graphic"],
+            },
+        },
+        {
+            "name": "remove_graphic",
+            "description": "Take a graphic off the timeline (its number from get_edit).",
+            "inputSchema": { "type": "object", "properties": { "graphic": { "type": "integer" } }, "required": ["graphic"] },
+        },
+        {
             "name": "restore_words",
             "description": "Put words from..to back into the video, whoever cut them. Any of your cuts touching the range is restored whole.",
             "inputSchema": { "type": "object", "properties": range(json!({})), "required": ["from", "to"] },
@@ -440,6 +500,140 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             }
             edits::save(folder, &e)?;
             Ok(format!("Placed \"{}\" over {a}-{b}. Luke will see it in blue until he reviews it.", name.trim()))
+        }
+        "list_graphics" => {
+            if let Some(name) = args["name"].as_str().filter(|n| !n.trim().is_empty()) {
+                return graphics::details(name);
+            }
+            let style = crate::style::load();
+            let brand = &style["brand"];
+            let brand = if brand.as_object().is_some_and(|b| !b.is_empty()) { format!("Luke's brand (applied to every graphic for you): {brand}\n") } else { String::new() };
+            Ok(format!(
+                "Catalogue (name, group, length as made: what it is). Call list_graphics with a name for its words and settings.\n{}\n\n{brand}",
+                graphics::describe()
+            ))
+        }
+        "graphics_guide" => Ok(graphics::guide()),
+        "add_graphic" => {
+            let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
+            if a > b {
+                return Err("`from` must not be after `to`".into());
+            }
+            let reason = args["reason"].as_str().filter(|r| !r.trim().is_empty()).ok_or("Give a short `reason`.")?.trim();
+            let label = args["name"].as_str().map(str::trim).filter(|t| !t.is_empty());
+            let catalog = args["catalog"].as_str().map(str::trim).filter(|t| !t.is_empty());
+            let slug = match (catalog, args["html"].as_str()) {
+                (Some(c), _) => graphics::add_from_catalog(folder, c)?,
+                (None, Some(html)) => graphics::create(folder, label.ok_or("Give the new graphic a `name`.")?, html)?,
+                _ => return Err("Give a `catalog` graphic's name, or the `html` of one you wrote.".into()),
+            };
+            if let Some(map) = args["texts"].as_object().filter(|m| !m.is_empty()) {
+                let filled = graphics::source(folder, &slug).and_then(|src| graphics::apply_texts(&src, map)).and_then(|html| graphics::replace(folder, &slug, &html));
+                if let Err(err) = filled {
+                    let _ = std::fs::remove_dir_all(folder.join("graphics").join(&slug));
+                    return Err(err);
+                }
+            }
+            let start = (words[a].start - 0.1).max(0.0);
+            let end = match args["seconds"].as_f64() {
+                Some(len) => start + len.clamp(0.5, 120.0),
+                None => (words[b].end + 0.4).max(start + 2.0),
+            }
+            .min(duration);
+            let mut g = json!({ "slug": slug, "name": label.or(catalog).unwrap_or("Graphic"), "start": start, "end": end, "by": "agent", "status": "pending", "reason": reason });
+            if let Some(c) = catalog {
+                g["from"] = json!(c);
+            }
+            // One of Luke's keeps the settings and words he saved it with.
+            let item = catalog.and_then(graphics::find).unwrap_or(Value::Null);
+            let mut params = item["values"].as_object().cloned().unwrap_or_default();
+            params.extend(args["params"].as_object().cloned().unwrap_or_default());
+            if !params.is_empty() {
+                g["params"] = Value::Object(params);
+            }
+            if item["texts"].is_object() && args["texts"].as_object().is_none_or(|m| m.is_empty()) {
+                g["texts"] = item["texts"].clone();
+            }
+            place_graphic(&mut g, args);
+            edits::list(&mut e, "graphics").push(g);
+            e.log.push(json!({ "at": edits::now(), "by": "agent", "op": "graphic", "note": reason }));
+            let number = edits::list(&mut e, "graphics").len() - 1;
+            edits::save(folder, &e)?;
+            Ok(format!("Added graphic {number} over {a}-{b} ({start:.2}-{end:.2}s). Luke will see it in blue until he reviews it."))
+        }
+        "get_graphic" | "update_graphic" | "remove_graphic" => {
+            let i = args["graphic"].as_u64().ok_or("`graphic` must be its number from get_edit")? as usize;
+            let list = edits::list(&mut e, "graphics");
+            let g = list.get_mut(i).filter(|g| g["status"] != "restored").ok_or_else(|| format!("There's no graphic {i}. get_edit lists them."))?;
+            let slug = g["slug"].as_str().unwrap_or("").to_string();
+            match name {
+                "get_graphic" => {
+                    let html = graphics::source(folder, &slug)?;
+                    Ok(format!("Graphic {i}: {g}\nIts words: {:?}\n\nComposition:\n{html}", graphics::texts(&html)))
+                }
+                "remove_graphic" => {
+                    if g["by"] == "agent" {
+                        g["status"] = json!("restored");
+                    } else {
+                        list.remove(i);
+                    }
+                    e.log.push(json!({ "at": edits::now(), "by": "agent", "op": "remove-graphic" }));
+                    edits::save(folder, &e)?;
+                    Ok(format!("Removed graphic {i}."))
+                }
+                _ => {
+                    let mut changed = vec![];
+                    let mut html = None;
+                    if let Some(h) = args["html"].as_str() {
+                        graphics::check(h)?;
+                        html = Some(h.to_string());
+                        g.as_object_mut().unwrap().remove("texts"); // Luke's word changes were for the old one
+                        changed.push("composition");
+                    }
+                    if let Some(map) = args["texts"].as_object().filter(|m| !m.is_empty()) {
+                        let base = match html.take() { Some(h) => h, None => graphics::source(folder, &slug)? };
+                        html = Some(graphics::apply_texts(&base, map)?);
+                        g.as_object_mut().unwrap().remove("texts");
+                        changed.push("words");
+                    }
+                    if let Some(p) = args["params"].as_object() {
+                        let mut params = g["params"].as_object().cloned().unwrap_or_default();
+                        for (k, v) in p {
+                            if v.is_null() { params.remove(k); } else { params.insert(k.clone(), v.clone()); }
+                        }
+                        g["params"] = Value::Object(params);
+                        changed.push("settings");
+                    }
+                    if args["from"].is_u64() || args["to"].is_u64() {
+                        let start = g["start"].as_f64().unwrap_or(0.0);
+                        let end = g["end"].as_f64().unwrap_or(start + 2.0);
+                        let a = if args["from"].is_u64() { (words[index(args, "from", n)?].start - 0.1).max(0.0) } else { start };
+                        let b = if args["to"].is_u64() { (words[index(args, "to", n)?].end + 0.4).min(duration) } else { end };
+                        if b - a < 0.1 {
+                            return Err("`from` must come before `to`.".into());
+                        }
+                        g["start"] = json!(a);
+                        g["end"] = json!(b);
+                        changed.push("times");
+                    }
+                    if place_graphic(g, args) {
+                        changed.push("place");
+                    }
+                    if changed.is_empty() {
+                        return Err("Say what to change: html, texts, params, from/to, x/y or scale.".into());
+                    }
+                    if let Some(h) = html {
+                        graphics::replace(folder, &slug, &h)?;
+                        g["rev"] = json!(g["rev"].as_u64().unwrap_or(0) + 1);
+                    }
+                    if g["by"] == "agent" {
+                        g["status"] = json!("pending");
+                    }
+                    e.log.push(json!({ "at": edits::now(), "by": "agent", "op": "edit-graphic", "note": changed.join(", ") }));
+                    edits::save(folder, &e)?;
+                    Ok(format!("Changed graphic {i}'s {}.", changed.join(", ")))
+                }
+            }
         }
         "speed_up" | "blur" => {
             let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
@@ -628,6 +822,18 @@ fn clock(t: f64) -> String {
 }
 
 /// The transcript as runs of kept and cut words, which reads well and keeps indexes exact.
+/// A graphic's place and size from the tool's x, y and scale. True if any was given.
+fn place_graphic(g: &mut Value, args: &Value) -> bool {
+    let mut any = false;
+    for (key, lo, hi) in [("x", -0.5, 0.5), ("y", -0.5, 0.5), ("scale", 0.2, 2.0)] {
+        if let Some(v) = args[key].as_f64() {
+            g[key] = json!((v.clamp(lo, hi) * 1000.0).round() / 1000.0);
+            any = true;
+        }
+    }
+    any
+}
+
 fn describe(words: &[edits::Word], e: &edits::Edits, duration: f64) -> String {
     let kinds = edits::kinds(words.len(), e);
     let ranges = edits::kept_ranges(words, &kinds, duration);
@@ -693,6 +899,15 @@ fn describe(words: &[edits::Word], e: &edits::Edits, duration: f64) -> String {
                 t["start"].as_f64().unwrap_or(0.0),
                 t["end"].as_f64().unwrap_or(0.0)
             );
+        }
+    }
+    let graphics: Vec<(usize, &Value)> = e.other.get("graphics").and_then(Value::as_array).map(|a| a.iter().enumerate().filter(|(_, g)| g["status"] != "restored").collect()).unwrap_or_default();
+    if !graphics.is_empty() {
+        s += "Motion graphics (source seconds; change them with update_graphic):\n";
+        for (i, g) in graphics {
+            let who = if g["by"] == "agent" { format!("yours, {}", g["status"].as_str().unwrap_or("pending")) } else { "Luke's".into() };
+            let reason = g["reason"].as_str().map(|r| format!(": {r}")).unwrap_or_default();
+            s += &format!("graphic {i} \"{}\" {:.2}-{:.2}s ({who}){reason}\n", g["name"].as_str().unwrap_or(""), g["start"].as_f64().unwrap_or(0.0), g["end"].as_f64().unwrap_or(0.0));
         }
     }
     let notes = e.other.get("notes").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -774,7 +989,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 24);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 30);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");
@@ -844,4 +1059,43 @@ mod tests {
         assert_eq!(bad["isError"], true);
         fs::remove_dir_all(&dir).ok();
     }
+    #[test]
+    fn places_and_changes_graphics() {
+        let dir = std::env::temp_dir().join(format!("roughcut-mcp-graphics-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let words: Vec<Value> = "I tested this for thirty days".split(' ').enumerate().map(|(i, w)| json!({ "text": w, "start": i as f64 * 0.5, "end": i as f64 * 0.5 + 0.4 })).collect();
+        fs::write(dir.join("words.json"), Value::Array(words).to_string()).unwrap();
+        fs::write(dir.join("decisions.json"), json!({ "cuts": [] }).to_string()).unwrap();
+        let call = |name: &str, args: Value| rpc(&dir, "tools/call", json!({ "name": name, "arguments": args }));
+        let text = |v: &Value| v["content"][0]["text"].as_str().unwrap().to_string();
+        let list = text(&call("list_graphics", json!({})));
+        assert!(list.contains("lt-clean-bar"), "{list}");
+        let details = text(&call("list_graphics", json!({ "name": "lt-clean-bar" })));
+        assert!(details.contains("Dr. Maya Chen"), "{details}");
+        assert!(text(&call("graphics_guide", json!({}))).contains("__timelines"));
+        let bad = call("add_graphic", json!({ "catalog": "lt-clean-bar", "from": 0, "to": 1, "texts": { "Nobody": "x" }, "reason": "name" }));
+        assert_eq!(bad["isError"], true);
+        assert!(!dir.join("graphics/lt-clean-bar").exists(), "a failed add leaves nothing behind");
+        let added = call("add_graphic", json!({ "catalog": "lt-clean-bar", "from": 0, "to": 1, "texts": { "Dr. Maya Chen": "Luke Lewis" }, "params": {}, "scale": 0.8, "reason": "who he is" }));
+        assert!(text(&added).contains("graphic 0"), "{added}");
+        assert!(fs::read_to_string(dir.join("graphics/lt-clean-bar/source.html")).unwrap().contains("Luke Lewis"));
+        let edit = text(&call("get_edit", json!({})));
+        assert!(edit.contains("graphic 0 \"lt-clean-bar\" 0.00-2.00s (yours, pending): who he is"), "{edit}");
+        let html = r#"<div data-composition-id="s" data-width="1920" data-height="1080"><p>30 days</p></div><script>const tl = gsap.timeline({paused:true}); window.__timelines["s"] = tl;</script>"#;
+        assert!(text(&call("add_graphic", json!({ "html": html, "name": "30 days", "from": 4, "to": 5, "reason": "the number" }))).contains("graphic 1"));
+        let changed = call("update_graphic", json!({ "graphic": 1, "texts": { "30 days": "31 days" }, "params": { "--accent": "#ff0000" }, "to": 5 }));
+        assert!(text(&changed).contains("words, settings, times"), "{changed}");
+        let saved: Value = serde_json::from_str(&fs::read_to_string(dir.join("edits.json")).unwrap()).unwrap();
+        assert_eq!(saved["graphics"][1]["rev"], 1);
+        assert_eq!(saved["graphics"][1]["params"]["--accent"], "#ff0000");
+        assert_eq!(saved["graphics"][0]["scale"], 0.8);
+        assert!(text(&call("get_graphic", json!({ "graphic": 1 }))).contains("31 days"));
+        call("remove_graphic", json!({ "graphic": 0 }));
+        let saved: Value = serde_json::from_str(&fs::read_to_string(dir.join("edits.json")).unwrap()).unwrap();
+        assert_eq!(saved["graphics"][0]["status"], "restored");
+        assert_eq!(call("get_graphic", json!({ "graphic": 0 }))["isError"], true);
+        fs::remove_dir_all(&dir).ok();
+    }
+
 }

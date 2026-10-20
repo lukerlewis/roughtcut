@@ -1,4 +1,4 @@
-import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, MessageSquareX, Sparkles, Mic, Scissors, SkipBack } from "lucide-react";
+import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, Clapperboard, MessageSquareX, Sparkles, Mic, Scissors, SkipBack } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
@@ -106,7 +106,7 @@ export default function App() {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [focus, setFocus] = useState(-1);
   const [state, setState] = useState<PlayerState>({ playing: false, time: 0, source: 0 });
-  const [exporting, setExporting] = useState<{ progress: number; dest: string; done: boolean; error?: string } | null>(null);
+  const [exporting, setExporting] = useState<{ progress: number; dest: string; done: boolean; error?: string; status?: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [left, setLeft] = useState<"transcript" | "library">("transcript");
   const [tab, setTab] = useState<"changes" | "chat" | "effect" | "style" | "versions">("changes");
@@ -153,6 +153,7 @@ export default function App() {
       ),
       backend.listen<string>("roughcut-log", (line) => setCutting((c) => (c ? { ...c, log: [...c.log, line].slice(-8) } : c))),
       backend.listen<number>("export-progress", (progress) => setExporting((x) => (x ? { ...x, progress } : x))),
+      backend.listen<string>("export-status", (status) => setExporting((x) => (x ? { ...x, status } : x))),
       backend.onDrop((paths) => paths[0] && open(paths[0])),
       backend.listen<string>("open-file", (path) => open(path)),
       backend.listen("recording-saving", () => setRecording("saving")),
@@ -309,6 +310,36 @@ export default function App() {
       edits,
       "Try three other openings for this video.",
     );
+  };
+
+  // "Suggest graphics": a cheap look at the transcript first; Claude builds
+  // graphics only for the moments it picked, so a video needing none costs little.
+  const [spotting, setSpotting] = useState(false);
+  const suggestGraphics = async () => {
+    if (!project || !edits || asking || spotting) return;
+    player.current?.pause();
+    setTab("chat");
+    if (graphicsLevel === "off") {
+      setChat((c) => ({ ...c, messages: [...c.messages, { role: "claude", text: "Graphics suggestions are off. Turn them on under Motion graphics in Style." }] }));
+      return;
+    }
+    setSpotting(true);
+    setChat((c) => ({ ...c, messages: [...c.messages, { role: "you", text: "Suggest graphics for this video." }] }));
+    try {
+      await backend.saveEdits(project.folder, edits);
+      const { moments, prompt } = await backend.spotGraphics(project.folder);
+      setSpotting(false);
+      if (!moments.length) {
+        setChat((c) => ({ ...c, messages: [...c.messages, { role: "claude", text: "I read through it and nothing needs a graphic." }] }));
+        return;
+      }
+      const list = moments.map((m) => `${m.idea} (${m.why.replace(/\.$/, "")})`).join("; ");
+      await ask(prompt, edits, `Make ${moments.length === 1 ? "this graphic" : `these ${moments.length} graphics`}: ${list}.`);
+    } catch (e) {
+      setChat((c) => ({ ...c, messages: [...c.messages, { role: "error", text: String(e) }] }));
+    } finally {
+      setSpotting(false);
+    }
   };
 
   // Claude's rough cut, when Luke asks for it. Its cuts arrive unreviewed, in blue.
@@ -552,6 +583,7 @@ export default function App() {
 
   // --- Motion graphics ------------------------------------------------------
   const [brand, setBrand] = useState<backend.Brand | undefined>(); // Luke's look, from Style
+  const [graphicsLevel, setGraphicsLevel] = useState<backend.Style["graphics"]>();
   // HyperFrames compositions in the project's graphics folder, shown over the
   // video in frames. Each one's page is rewritten with its settings when they
   // change, then reloaded.
@@ -579,6 +611,7 @@ export default function App() {
     return graphicSources.current.get(key)!;
   };
   const writtenViews = useRef(new Map<string, string>());
+  const viewWrites = useRef(new Map<string, Promise<unknown>>()); // the latest write of each, so the export can wait for them
   const [graphicVersions, setGraphicVersions] = useState<Record<string, number>>({});
   useEffect(() => {
     if (!project) return;
@@ -587,10 +620,11 @@ export default function App() {
       const sig = JSON.stringify([p.g.params, p.g.texts, p.g.rev, p.g.brand, length, brand]);
       if (writtenViews.current.get(p.g.slug) === sig) continue;
       writtenViews.current.set(p.g.slug, sig);
-      sourceOf(p.g.slug, p.g.rev)
+      const write = sourceOf(p.g.slug, p.g.rev)
         .then((src) => backend.saveGraphicView(project.folder, p.g.slug, viewHtml(src, p.g, length, brand)))
         .then(() => setGraphicVersions((v) => ({ ...v, [p.g.slug]: (v[p.g.slug] ?? 0) + 1 })))
         .catch((e) => setNotice(String(e)));
+      viewWrites.current.set(p.g.slug, write);
     }
   }, [placedGraphics, project, brand]);
   const [pickedSource, setPickedSource] = useState<string | null>(null);
@@ -613,10 +647,44 @@ export default function App() {
     try {
       const slug = await backend.addCatalogGraphic(project.folder, name);
       const index = edits.graphics?.length ?? 0;
-      change((x) => addGraphic(x, slug, item?.title ?? name, start, end, name));
+      change((x) => {
+        const added = addGraphic(x, slug, item?.title ?? name, start, end, name);
+        // One of Luke's comes with the settings and words he saved it with.
+        if (!item?.values && !item?.texts) return added;
+        const graphics = added.graphics!.map((g, i) => (i === index ? { ...g, params: item.values, texts: item.texts } : g));
+        return { ...added, graphics };
+      });
       setSelection(null);
       player.current?.seekSource(cutToSource(ranges, a + Math.min(1.5, (b - a) / 2)).source);
       setTimeout(() => pickEffect({ kind: "graphic", index }), 0);
+    } catch (e) {
+      setNotice(String(e));
+    }
+  };
+  const saveGraphic = async () => {
+    if (!pickedGraphic || !project) return;
+    const from = catalog.find((c) => c.name === pickedGraphic.from);
+    const placed = placedGraphics.find((p) => p.g === pickedGraphic);
+    try {
+      await backend.saveGraphicTemplate(project.folder, pickedGraphic.slug, {
+        title: pickedGraphic.name,
+        duration: Math.round((placed ? placed.end - placed.start : pickedGraphic.end - pickedGraphic.start) * 100) / 100,
+        width: from?.width ?? 1920,
+        height: from?.height ?? 1080,
+        params: from?.params ?? [],
+        ...(pickedGraphic.params ? { values: pickedGraphic.params } : {}),
+        ...(pickedGraphic.texts ? { texts: pickedGraphic.texts } : {}),
+      });
+      setCatalog(await backend.graphicsCatalog());
+      setNotice(`Saved “${pickedGraphic.name}” under Yours in the Library.`);
+    } catch (e) {
+      setNotice(String(e));
+    }
+  };
+  const forgetGraphic = async (name: string) => {
+    try {
+      await backend.forgetGraphicTemplate(name);
+      setCatalog(await backend.graphicsCatalog());
     } catch (e) {
       setNotice(String(e));
     }
@@ -641,7 +709,7 @@ export default function App() {
   // How each kind of graphic moves unless Luke changes it: his saved defaults over the built-in ones.
   const [motionDefaults, setMotionDefaults] = useState<Record<TextStyle, Motion>>(MOTION_DEFAULTS);
   useEffect(() => {
-    backend.loadStyle().then((s) => (setMotionDefaults({ ...MOTION_DEFAULTS, ...s.motion }), setBrand(s.brand)), () => {});
+    backend.loadStyle().then((s) => (setMotionDefaults({ ...MOTION_DEFAULTS, ...s.motion }), setBrand(s.brand), setGraphicsLevel(s.graphics)), () => {});
   }, []);
   const makeMotionDefault = (style: TextStyle, motion: Motion) => {
     setMotionDefaults((m) => ({ ...m, [style]: motion }));
@@ -965,7 +1033,10 @@ export default function App() {
         captions.on && cues.length ? captionStrips(cues, captions.style, project.info.width, project.info.height) : null,
         await graphicsLayer(placed.map((p) => ({ ...p, full: false })), project.info.width, project.info.height, project.info.fps),
       ].filter((l) => l !== null);
-      await backend.exportCut(project.source, segments(ranges, words, zooms, clips, project.folder, edits ? liveBlurs(edits) : []), layers, edits?.voice ?? {}, dest);
+      // Graphics render from their pages, so those must be up to date.
+      await Promise.all(viewWrites.current.values());
+      const graphics = placedGraphics.map((p) => ({ slug: p.g.slug, at: p.start, x: p.g.x ?? 0, y: p.g.y ?? 0, scale: p.g.scale ?? 1 }));
+      await backend.exportCut(project.source, segments(ranges, words, zooms, clips, project.folder, edits ? liveBlurs(edits) : []), layers, edits?.voice ?? {}, dest, project.folder, graphics);
       setExporting({ progress: 1, dest, done: true });
     } catch (e) {
       setExporting({ progress: 0, dest, done: true, error: String(e) });
@@ -1040,6 +1111,7 @@ export default function App() {
             { label: "Claude's rough cut", icon: <Scissors size={14} />, disabled: !!cutting, onClick: roughCut },
             { label: "Takes I marked (\u201ccut that\u201d)", icon: <MessageSquareX size={14} />, onClick: cutRetakes },
             { label: "Other openings (hooks)", icon: <Sparkles size={14} />, disabled: asking, onClick: hooks },
+            { label: spotting ? "Looking for graphics\u2026" : "Suggest graphics", icon: <Clapperboard size={14} />, disabled: asking || spotting, onClick: suggestGraphics },
           ]}
         />
         <Menu
@@ -1098,6 +1170,7 @@ export default function App() {
               onAddImage={() => void addImage()}
               imageUrl={(src) => imageUrls[src]}
               catalog={catalog}
+              onForgetGraphic={(name) => void forgetGraphic(name)}
             />
           ) : (
           <Transcript
@@ -1236,7 +1309,7 @@ export default function App() {
             )}
           </div>
           {tab === "style" ? (
-            <Style folder={project.folder} onChange={(st) => setBrand(st.brand)} />
+            <Style folder={project.folder} onChange={(st) => (setBrand(st.brand), setGraphicsLevel(st.graphics))} />
           ) : tab === "versions" ? (
             <Versions
               folder={project.folder}
@@ -1280,6 +1353,7 @@ export default function App() {
               graphicParams={catalog.find((c) => c.name === pickedGraphic?.from)?.params ?? []}
               onGraphic={(patch) => effect && change((x) => setGraphic(x, effect.index, patch))}
               onAskGraphic={askAboutGraphic}
+              onSaveGraphic={saveGraphic}
               onPreview={() => {
                 if (!effect) return;
                 const at = effectStart(edits, words, effect);
@@ -1394,6 +1468,7 @@ export default function App() {
           <div className="card">
             <h2>{exporting.done ? (exporting.error ? "Export failed" : "Exported") : "Exporting…"}</h2>
             <p className="summary" style={{ margin: 0 }}>{name(exporting.dest)}</p>
+            {!exporting.done && exporting.status && <p className="hint">{exporting.status}</p>}
             {!exporting.done && (
               <div className="bar">
                 <div style={{ width: `${Math.round(exporting.progress * 100)}%` }} />

@@ -7,12 +7,14 @@ mod assets;
 mod claude;
 mod edits;
 mod graphics;
+mod hyperframes;
 mod markers;
 mod mcp;
 mod matte;
 mod media;
 mod recorder;
 mod server;
+mod spot;
 mod style;
 mod tools;
 mod update;
@@ -176,7 +178,21 @@ async fn waveform(path: String, folder: String) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// A motion graphic in the export: its folder under graphics/, when it
+/// starts in the cut, and where it sits (as in the viewer).
+#[derive(serde::Deserialize)]
+struct PlacedGraphic {
+    slug: String,
+    at: f64,
+    #[serde(default)]
+    x: f64,
+    #[serde(default)]
+    y: f64,
+    scale: Option<f64>,
+}
+
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn export(
     app: AppHandle,
     source: String,
@@ -184,9 +200,33 @@ async fn export(
     overlays: Vec<media::Captions>,
     voice: Option<media::Voice>,
     dest: String,
+    folder: Option<String>,
+    graphics: Option<Vec<PlacedGraphic>>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        media::export(Path::new(&source), &segments, &overlays, voice.unwrap_or_default(), Path::new(&dest), |done| {
+        let say = |s: &str| {
+            let _ = app.emit("export-status", s);
+        };
+        let graphics = graphics.unwrap_or_default();
+        let mut movies = vec![];
+        if let (Some(folder), false) = (folder.as_deref(), graphics.is_empty()) {
+            if !hyperframes::ready() {
+                say("Setting up HyperFrames' renderer for your graphics. This happens once and downloads about 350 MB.");
+                hyperframes::install(&say)?;
+            }
+            let info = media::probe(Path::new(&source))?;
+            for (i, g) in graphics.iter().enumerate() {
+                say(&format!("Rendering graphic {} of {}…", i + 1, graphics.len()));
+                let _ = app.emit("export-progress", 0.0);
+                let file = hyperframes::render(Path::new(folder), &g.slug, info.fps, &|p| {
+                    let _ = app.emit("export-progress", p);
+                })?;
+                let m = media::probe(&file)?;
+                movies.push(media::Movie::placed(file, g.at, (m.width, m.height), (info.width, info.height), g.x, g.y, g.scale.unwrap_or(1.0)));
+            }
+        }
+        say("");
+        media::export(Path::new(&source), &segments, &overlays, &movies, voice.unwrap_or_default(), Path::new(&dest), |done| {
             let _ = app.emit("export-progress", done);
         })
     })
@@ -329,6 +369,17 @@ fn add_catalog_graphic(folder: String, name: String) -> Result<String, String> {
     graphics::add_from_catalog(Path::new(&folder), &name)
 }
 
+/// Saves a graphic from this project as one of Luke's; returns its catalogue name.
+#[tauri::command]
+fn save_graphic_template(folder: String, slug: String, info: Value) -> Result<String, String> {
+    graphics::save_template(Path::new(&folder), &slug, &info)
+}
+
+#[tauri::command]
+fn forget_graphic_template(name: String) -> Result<(), String> {
+    graphics::forget_template(&name)
+}
+
 #[tauri::command]
 fn graphic_source(folder: String, slug: String) -> Result<String, String> {
     graphics::source(Path::new(&folder), &slug)
@@ -350,6 +401,18 @@ fn graphics_url(server: tauri::State<server::Server>, folder: String) -> String 
 #[tauri::command]
 async fn suggest_rules(folder: String) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || style::suggest(Path::new(&folder))).await.map_err(|e| e.to_string())?
+}
+
+/// "Suggest graphics", first pass: the moments worth a graphic, and what to
+/// ask the sidebar Claude to build (empty when none are).
+#[tauri::command]
+async fn spot_graphics(folder: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let moments = spot::spot(Path::new(&folder))?;
+        Ok(serde_json::json!({ "prompt": spot::build_prompt(&moments), "moments": moments }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -463,6 +526,8 @@ pub fn run() {
             graphics_catalog,
             add_catalog_graphic,
             graphic_source,
+            save_graphic_template,
+            forget_graphic_template,
             save_graphic_view,
             graphics_url,
             save_assets,
@@ -486,6 +551,7 @@ pub fn run() {
             swap_background,
             save_style,
             suggest_rules,
+            spot_graphics,
             load_chat,
             save_chat,
             check_update,

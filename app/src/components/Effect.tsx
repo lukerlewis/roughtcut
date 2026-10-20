@@ -38,6 +38,7 @@ interface Props {
   graphicParams: CatalogGraphic["params"];
   onGraphic: (patch: Partial<Graphic>) => void;
   onAskGraphic: (text: string) => void; // Claude changes it
+  onSaveGraphic: () => void; // keep it in the Library to use again
 }
 
 const STYLES: [TextStyle, string][] = [
@@ -788,6 +789,9 @@ function GraphicSettings({ g, p }: { g: Graphic; p: Props }) {
         )}
         <button className="btn ghost" onClick={p.onPreview}>
           <Play size={14} /> Play it
+        </button>
+        <button className="btn ghost" onClick={p.onSaveGraphic} title="Keep it, as set up now, under Yours in the Library, for you and Claude to use again">
+          <Bookmark size={14} /> Save to my graphics
         </button>
         <button className="btn ghost" onClick={p.onRemove}>
           {g.status === "pending" ? <X size={14} /> : <Trash2 size={14} />} Remove graphic

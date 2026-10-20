@@ -51,6 +51,12 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml
+      # Sets up HyperFrames' renderer as the app does on Luke's first export, and renders a graphic.
+      # Not blocking: it downloads from npm, so a network hiccup shouldn't stop a build.
+      - name: Check motion graphics render on a Mac
+        continue-on-error: true
+        timeout-minutes: 15
+        run: ROUGHCUT_HYPERFRAMES="$RUNNER_TEMP/hyperframes" cargo test --manifest-path src-tauri/Cargo.toml renders_a_graphic -- --ignored --nocapture
       # Small native helpers (background swap, recorder), copied into the app next to Roughcut.
       - name: Build the native helpers
         run: |
@@ -72,6 +78,9 @@ jobs:
           test -x $BUNDLE/macos/Roughcut.app/Contents/MacOS/roughcut-matte
           test -x $BUNDLE/macos/Roughcut.app/Contents/MacOS/roughcut-recorder
           /usr/libexec/PlistBuddy -c "Print :NSCameraUsageDescription" $BUNDLE/macos/Roughcut.app/Contents/Info.plist
+          test -f $BUNDLE/macos/Roughcut.app/Contents/Resources/graphics/catalog.json
+          test -f $BUNDLE/macos/Roughcut.app/Contents/Resources/graphics/GUIDE.md
+          test -f $BUNDLE/macos/Roughcut.app/Contents/Resources/graphics/lib/hyperframes-runtime.js
           for f in Roughcut roughcut-matte roughcut-recorder; do lipo -archs "$BUNDLE/macos/Roughcut.app/Contents/MacOS/$f" | grep -q arm64; done
       # Ad-hoc signed, so macOS offers "Open Anyway" instead of calling a download "damaged".
       - name: Check the app is signed

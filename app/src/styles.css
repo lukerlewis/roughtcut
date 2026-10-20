@@ -400,11 +400,13 @@ body.dragging-fx, body.dragging-fx * { cursor: grabbing !important; }
 .library .group-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--muted-foreground); margin-bottom: 6px; min-height: 24px; }
 .library .group-head .btn { height: 22px; padding: 0 6px; font-size: 12px; }
 .library .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.library .card { display: flex; flex-direction: column; gap: 4px; padding: 4px; border-radius: 8px; border: 1px solid var(--stroke); background: var(--card); cursor: grab; user-select: none; min-width: 0; }
+.library .card { display: flex; flex-direction: column; gap: 4px; padding: 4px; border-radius: 8px; border: 1px solid var(--stroke); background: var(--card); cursor: grab; position: relative; user-select: none; min-width: 0; }
 .library .card:hover { background: var(--selected); }
 .library .card .poster { aspect-ratio: 16 / 9; border-radius: 5px; overflow: hidden; background: repeating-conic-gradient(var(--muted) 0 25%, transparent 0 50%) 0 0 / 12px 12px; }
 .library .card .poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .library .card .label { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px; }
+.library .card .remove { position: absolute; top: 6px; right: 6px; width: 18px; height: 18px; opacity: 0; background: var(--card); }
+.library .card:hover .remove { opacity: 1; }
 .graphics-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .graphics-layer .graphic { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 .graphics-layer .graphic iframe { border: 0; display: block; background: transparent; pointer-events: none; color-scheme: normal; }

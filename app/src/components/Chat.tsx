@@ -1,4 +1,4 @@
-import { ArrowUp, BookOpen, Captions, EyeOff, Film, Gauge, History, LayoutPanelLeft, Mic, MousePointerClick, MessageSquare, RotateCcw, Scissors, Square, Terminal, Type, User, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowUp, BookOpen, Captions, Clapperboard, EyeOff, Film, Gauge, History, LayoutPanelLeft, Mic, MousePointerClick, MessageSquare, RotateCcw, Scissors, Square, Terminal, Type, User, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../lib/backend";
 import { timecode, type Word } from "../lib/edl";
@@ -126,6 +126,27 @@ function Action({ m, words, onSeekWord }: { m: ChatMessage; words: Word[]; onSee
     return (
       <div className="action quiet">
         <Mic size={13} /> {m.input?.polish ? "Voice polished on export" : "Voice as recorded"}
+      </div>
+    );
+  if (m.tool === "list_graphics" || m.tool === "graphics_guide" || m.tool === "get_graphic")
+    return (
+      <div className="action quiet">
+        <Clapperboard size={13} /> {m.tool === "graphics_guide" ? "Read how to make a graphic" : m.tool === "get_graphic" ? "Looked at a graphic" : m.input?.name ? `Looked at ${String(m.input.name)}` : "Looked through the graphics"}
+      </div>
+    );
+  if (m.tool === "add_graphic")
+    return (
+      <div className="action" onClick={() => Number.isInteger(from) && onSeekWord(from)}>
+        <Clapperboard size={13} />
+        <span className="what">
+          Added {m.input?.html ? "a new graphic" : "a graphic"} on "{span}" <span className="why">· {m.input?.reason ?? ""}</span>
+        </span>
+      </div>
+    );
+  if (m.tool === "update_graphic" || m.tool === "remove_graphic")
+    return (
+      <div className="action quiet">
+        <Clapperboard size={13} /> {m.tool === "update_graphic" ? "Changed" : "Took off"} graphic {String(m.input?.graphic ?? "")}
       </div>
     );
   if (m.tool === "add_rule")

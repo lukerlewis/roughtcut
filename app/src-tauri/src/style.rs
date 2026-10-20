@@ -131,6 +131,15 @@ pub fn corrections(folder: &Path) -> Result<String, String> {
             out += &format!("- Luke's {what} moves like this: {}.\n", motion_words(&t["motion"]));
         }
     }
+    for g in e.other.get("graphics").and_then(Value::as_array).into_iter().flatten() {
+        let what = format!("graphic \"{}\"{}", g["name"].as_str().unwrap_or(""), g["reason"].as_str().map(|r| format!(" ({r})")).unwrap_or_default());
+        match (g["by"].as_str(), g["status"].as_str()) {
+            (Some("agent"), Some("restored")) => out += &format!("- Claude added a {what}; Luke removed it.\n"),
+            (Some("agent"), Some("accepted")) => out += &format!("- Claude added a {what}; Luke kept it.\n"),
+            (Some("you"), _) => out += &format!("- Luke added a {what} himself.\n"),
+            _ => {}
+        }
+    }
     for n in e.other.get("notes").and_then(Value::as_array).into_iter().flatten() {
         if n["by"] == "you" {
             out += &format!("- Luke's note: {}\n", n["text"].as_str().unwrap_or(""));
@@ -158,6 +167,34 @@ pub fn motion_words(m: &Value) -> String {
 
 const SCHEMA: &str = r#"{"type":"object","properties":{"rules":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"},"why":{"type":"string"}},"required":["text","why"]}}},"required":["rules"]}"#;
 
+/// One question to Claude on Luke's plan, with no tools and no saved
+/// session, answered as JSON matching `schema`.
+pub fn ask_json(folder: &Path, model: &str, schema: &str, prompt: &str) -> Result<Value, String> {
+    let claude = tools::claude().ok_or("Can't find Claude Code. Install it and run `claude` once in Terminal to log in.")?;
+    let mut child = tools::command(&claude)
+        .current_dir(folder)
+        .args(["-p", "--model", model, "--output-format", "json", "--tools", "", "--no-session-persistence", "--json-schema", schema])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Couldn't start Claude: {e}"))?;
+    child.stdin.take().unwrap().write_all(prompt.as_bytes()).map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let outer: Value = serde_json::from_slice(&out.stdout).map_err(|_| format!("Claude didn't answer: {}", String::from_utf8_lossy(&out.stderr).trim()))?;
+    if outer["is_error"] == true {
+        return Err(format!("Claude returned an error: {}", outer["result"]));
+    }
+    if outer["structured_output"].is_object() {
+        return Ok(outer["structured_output"].clone());
+    }
+    let text = outer["result"].as_str().unwrap_or("");
+    match (text.find('{'), text.rfind('}')) {
+        (Some(a), Some(b)) if b > a => serde_json::from_str(&text[a..=b]).map_err(|e| e.to_string()),
+        _ => Err("Claude's answer wasn't in the expected shape.".into()),
+    }
+}
+
 /// Asks Claude (on Luke's plan, no tools) for rules that would have saved
 /// Luke these corrections. Returns [{text, why}].
 pub fn suggest(folder: &Path) -> Result<Value, String> {
@@ -173,35 +210,11 @@ pub fn suggest(folder: &Path) -> Result<Value, String> {
          Suggest up to 4 new rules, in Luke's voice, that would have got these right the first time and will hold for his \
          other videos (\"Keep 'so' at the start of a sentence\", \"Never zoom in more than once in 10 seconds\"). Only suggest a \
          rule a pattern in the corrections supports, never one he already has. Rules can be about how graphics move \
-         (\"Lower thirds slide in from the left, snappy, about 0.4s\") when his choices show a pattern. Each `why` is one short sentence pointing at \
+         (\"Lower thirds slide in from the left, snappy, about 0.4s\") or when to add motion graphics (\"Show numbers as a big stat\", \"No graphics in the intro\") when his choices show a pattern. Each `why` is one short sentence pointing at \
          the correction. If nothing is a pattern yet, return no rules.",
         if have.is_empty() { "(none)".to_string() } else { have.iter().map(|r| format!("- {r}")).collect::<Vec<_>>().join("\n") }
     );
-    let claude = tools::claude().ok_or("Can't find Claude Code. Install it and run `claude` once in Terminal to log in.")?;
-    let mut child = tools::command(&claude)
-        .current_dir(folder)
-        .args(["-p", "--model", "opus", "--output-format", "json", "--tools", "", "--no-session-persistence", "--json-schema", SCHEMA])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Couldn't start Claude: {e}"))?;
-    child.stdin.take().unwrap().write_all(prompt.as_bytes()).map_err(|e| e.to_string())?;
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    let outer: Value = serde_json::from_slice(&out.stdout).map_err(|_| format!("Claude didn't answer: {}", String::from_utf8_lossy(&out.stderr).trim()))?;
-    if outer["is_error"] == true {
-        return Err(format!("Claude returned an error: {}", outer["result"]));
-    }
-    let data = if outer["structured_output"].is_object() {
-        outer["structured_output"].clone()
-    } else {
-        let text = outer["result"].as_str().unwrap_or("");
-        let (a, b) = (text.find('{'), text.rfind('}'));
-        match (a, b) {
-            (Some(a), Some(b)) if b > a => serde_json::from_str(&text[a..=b]).map_err(|e| e.to_string())?,
-            _ => return Err("Claude's answer had no rules in it.".into()),
-        }
-    };
+    let data = ask_json(folder, "opus", SCHEMA, &prompt)?;
     Ok(data["rules"].clone())
 }
 
