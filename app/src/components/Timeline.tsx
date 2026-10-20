@@ -1,6 +1,6 @@
 import { Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { cutDuration, timecode } from "../lib/edl";
+import { cutDuration, cutToSource, sourceToCut, timecode, wordAt, zoomSpan, type Word, type Zoom } from "../lib/edl";
 
 interface Props {
   ranges: [number, number][];
@@ -9,13 +9,21 @@ interface Props {
   playing: boolean;
   claudeJoins: number[]; // indexes of joins where Claude's unreviewed cut sits
   fps: number;
+  words: Word[];
+  zooms: Zoom[]; // all of them; removed ones are skipped
+  onZoomEdit: (index: number, first: number, last: number) => void;
   onScrub: (t: number) => void;
   onScrubEnd?: () => void;
 }
 
 const RULER = 22;
-const LANE_TOP = 30;
+const ZOOM_TOP = 28; // the effects track, above the clips
+const ZOOM_H = 18;
+const LANE_TOP = 52;
 const LANE_H = 100;
+const EDGE = 6; // px from a block's end that grabs its edge
+
+type Drag = { mode: "scrub" } | { mode: "left" | "right" | "move"; index: number; first: number; last: number; grabT: number };
 
 function css(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -32,8 +40,17 @@ export function Timeline(p: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [zoom, setZoom] = useState(0); // 0 = fit the whole cut
   const [scroll, setScroll] = useState(0); // seconds at the left edge
-  const drag = useRef(false);
+  const drag = useRef<Drag | null>(null);
+  const [moving, setMoving] = useState<{ index: number; first: number; last: number } | null>(null);
   const total = cutDuration(p.ranges);
+
+  // Each live zoom as a block in cut time, with the edit in progress applied.
+  const blocks = p.zooms.flatMap((z, index) => {
+    if (z.status === "restored") return [];
+    const m = moving?.index === index ? { ...z, first: moving.first, last: moving.last } : z;
+    const [a, b] = zoomSpan(p.words, m);
+    return [{ index, z: m, a: sourceToCut(p.ranges, a), b: sourceToCut(p.ranges, b) }];
+  });
 
   const pxPerSec = useCallback(
     (width: number) => {
@@ -137,6 +154,24 @@ export function Timeline(p: Props) {
       }
     });
 
+    // Effects track: zooms as blocks, blue while Claude's and unreviewed.
+    g.font = `500 10px ${css("--mono") || "monospace"}`;
+    for (const { z, a, b } of blocks) {
+      const x0 = x(a);
+      const x1 = x(b);
+      if (x1 < 0 || x0 > w) continue;
+      const pending = z.status === "pending";
+      g.fillStyle = pending ? css("--unread") : css("--stroke-strong");
+      g.beginPath();
+      g.roundRect(x0, ZOOM_TOP, Math.max(4, x1 - x0 - 1), ZOOM_H, 4);
+      g.fill();
+      g.fillStyle = pending ? "#fff" : css("--foreground");
+      g.fillRect(x0 + 2, ZOOM_TOP + 5, 2, ZOOM_H - 10);
+      g.fillRect(x1 - 5, ZOOM_TOP + 5, 2, ZOOM_H - 10);
+      if (x1 - x0 > 60) g.fillText(`Zoom ${Math.round(z.scale * 100)}%`, x0 + 9, ZOOM_TOP + 12.5);
+    }
+    g.font = `11px ${css("--mono") || "monospace"}`;
+
     // Playhead.
     const ph = x(p.time);
     g.fillStyle = css("--ink");
@@ -146,7 +181,7 @@ export function Timeline(p: Props) {
     g.lineTo(ph + 5, 0);
     g.lineTo(ph, 7);
     g.fill();
-  }, [p.ranges, p.peaks, p.time, p.claudeJoins, zoom, scroll, pxPerSec]);
+  }, [p.ranges, p.peaks, p.time, p.claudeJoins, zoom, scroll, pxPerSec, blocks]);
 
   const timeAt = (clientX: number) => {
     const c = canvas.current!;
@@ -155,11 +190,54 @@ export function Timeline(p: Props) {
     return Math.max(0, Math.min(total, t));
   };
 
+  /** What's under the pointer on the effects track: a block's edge or body. */
+  const hit = (clientX: number, clientY: number) => {
+    const c = canvas.current!;
+    const r = c.getBoundingClientRect();
+    const y = clientY - r.top;
+    if (y < ZOOM_TOP - 2 || y > ZOOM_TOP + ZOOM_H + 2) return null;
+    const pps = pxPerSec(c.clientWidth);
+    const px = (t: number) => r.left + 12 + (t - (zoom === 0 ? 0 : scroll)) * pps;
+    for (const bl of blocks) {
+      const [x0, x1] = [px(bl.a), px(bl.b)];
+      if (clientX < x0 - EDGE || clientX > x1 + EDGE) continue;
+      const mode = Math.abs(clientX - x0) <= EDGE ? "left" : Math.abs(clientX - x1) <= EDGE ? "right" : "move";
+      return { mode, block: bl } as const;
+    }
+    return null;
+  };
+
+  // A word boundary near cut time t: the start of a word for a left edge, the end of one for a right edge.
+  const snap = (t: number, edge: "start" | "end") => {
+    const src = cutToSource(p.ranges, t).source;
+    let i = Math.max(0, wordAt(p.words, src));
+    if (edge === "start" && i + 1 < p.words.length && Math.abs(p.words[i + 1].start - src) < Math.abs(p.words[i].start - src)) i++;
+    if (edge === "end" && i > 0 && Math.abs(p.words[i - 1].end - src) < Math.abs(p.words[i].end - src)) i--;
+    return i;
+  };
+
   useEffect(() => {
-    const move = (e: MouseEvent) => drag.current && p.onScrub(timeAt(e.clientX));
+    const move = (e: MouseEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      if (d.mode === "scrub") return p.onScrub(timeAt(e.clientX));
+      const t = timeAt(e.clientX);
+      if (d.mode === "left") setMoving({ index: d.index, first: Math.min(snap(t, "start"), d.last), last: d.last });
+      else if (d.mode === "right") setMoving({ index: d.index, first: d.first, last: Math.max(snap(t, "end"), d.first) });
+      else {
+        const len = d.last - d.first;
+        const startSrc = cutToSource(p.ranges, sourceToCut(p.ranges, p.words[d.first].start) + (t - d.grabT)).source;
+        const first = Math.max(0, Math.min(p.words.length - 1 - len, wordAt(p.words, startSrc + 0.01)));
+        setMoving({ index: d.index, first, last: first + len });
+      }
+    };
     const up = () => {
-      if (drag.current) p.onScrubEnd?.();
-      drag.current = false;
+      const d = drag.current;
+      drag.current = null;
+      if (!d) return;
+      if (d.mode === "scrub") p.onScrubEnd?.();
+      else if (moving) p.onZoomEdit(moving.index, moving.first, moving.last);
+      setMoving(null);
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
@@ -187,8 +265,20 @@ export function Timeline(p: Props) {
       <canvas
         ref={canvas}
         onMouseDown={(e) => {
-          drag.current = true;
+          const h = hit(e.clientX, e.clientY);
+          if (h) {
+            const { index, z } = h.block;
+            drag.current = { mode: h.mode, index, first: z.first, last: z.last, grabT: timeAt(e.clientX) };
+            setMoving({ index, first: z.first, last: z.last });
+            return;
+          }
+          drag.current = { mode: "scrub" };
           p.onScrub(timeAt(e.clientX));
+        }}
+        onMouseMove={(e) => {
+          if (drag.current) return;
+          const h = hit(e.clientX, e.clientY);
+          e.currentTarget.style.cursor = !h ? "default" : h.mode === "move" ? "grab" : "ew-resize";
         }}
         onWheel={(e) => {
           if (e.ctrlKey || e.metaKey) setZoom((z) => Math.max(0, Math.min(8, z + (e.deltaY < 0 ? 1 : -1))));

@@ -1,4 +1,4 @@
-import { Download, FolderOpen, Pause, Play, SkipBack } from "lucide-react";
+import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, SkipBack } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
@@ -7,7 +7,17 @@ import { Transcript, type Selection } from "./components/Transcript";
 import * as backend from "./lib/backend";
 import {
   acceptAll,
+  addZoom,
   agentCutAt,
+  captionCues,
+  cueAt,
+  liveZooms,
+  moveZoom,
+  removeZooms,
+  segments,
+  setCaptions,
+  setZoomStatus,
+  zoomAt,
   cutDuration,
   cutKinds,
   cutWords,
@@ -19,6 +29,7 @@ import {
   setAgentStatus,
   timecode,
   wordAt,
+  type CaptionStyle,
   type Edits,
   type Word,
 } from "./lib/edl";
@@ -156,6 +167,19 @@ export default function App() {
     return joins;
   }, [edits, ranges, words]);
 
+  const zooms = useMemo(() => (edits ? liveZooms(edits) : []), [edits]);
+  const captions = edits?.captions ?? { on: false, style: "bold" as CaptionStyle };
+  const cues = useMemo(
+    () => (edits && captions.on ? captionCues(words, keptSet(words.length, edits), ranges) : []),
+    [edits, captions.on, words, ranges],
+  );
+  // For the transcript: which words sit in a zoom, and whether it's Claude's unreviewed one.
+  const zoomKinds = useMemo(() => {
+    const k: ("zoom" | "zoom-pending" | null)[] = new Array(words.length).fill(null);
+    for (const z of zooms) for (let i = z.first; i <= z.last; i++) k[i] = z.status === "pending" ? "zoom-pending" : "zoom";
+    return k;
+  }, [zooms, words.length]);
+
   // --- Claude in the sidebar ----------------------------------------------
 
   const projectRef = useRef(project);
@@ -221,6 +245,8 @@ export default function App() {
 
   const current = wordAt(words, state.source + 0.02);
   const showingRemoved = current >= 0 && kinds[current] !== null && words[current].end > state.source;
+  const zoom = zoomAt(words, zooms, state.source);
+  const cue = captions.on ? cueAt(cues, state.time) : null;
 
   const seekWord = (i: number) => {
     setSelection(null);
@@ -232,6 +258,12 @@ export default function App() {
       const c = edits ? agentCutAt(edits, i) : -1;
       if (c >= 0) setFocus(c);
     } else player.current?.seekSource(w.start);
+  };
+
+  const toggleZoom = (first: number, last: number) => {
+    const overlaps = zooms.some((z) => z.first <= last && z.last >= first);
+    change((x) => (overlaps ? removeZooms(x, first, last) : addZoom(x, first, last)));
+    setSelection(null);
   };
 
   // --- Keyboard ------------------------------------------------------------
@@ -247,6 +279,9 @@ export default function App() {
         e.preventDefault();
         change((x) => cutWords(x, selection.first, selection.last));
         setSelection(null);
+      } else if (!mod && e.key.toLowerCase() === "z" && selection) {
+        e.preventDefault();
+        toggleZoom(selection.first, selection.last);
       } else if (mod && e.key.toLowerCase() === "z") {
         e.preventDefault();
         if (e.shiftKey) redo();
@@ -273,7 +308,7 @@ export default function App() {
     if (!dest) return;
     setExporting({ progress: 0, dest, done: false });
     try {
-      await backend.exportCut(project.source, ranges, dest);
+      await backend.exportCut(project.source, segments(ranges, words, zooms), captions.on ? { style: captions.style, cues } : null, dest);
       setExporting({ progress: 1, dest, done: true });
     } catch (e) {
       setExporting({ progress: 0, dest, done: true, error: String(e) });
@@ -327,6 +362,20 @@ export default function App() {
         </span>
         <span className="sub">{saved > 0 ? `${Math.round((saved / project.info.duration) * 100)}% shorter` : ""}</span>
         <span className="spacer" data-tauri-drag-region />
+        <div className="seg" title="Captions">
+          <button className={!captions.on ? "on" : ""} onClick={() => change((x) => setCaptions(x, { ...captions, on: false }))}>
+            <CaptionsIcon size={15} /> Off
+          </button>
+          {(["bold", "clean"] as const).map((st) => (
+            <button
+              key={st}
+              className={captions.on && captions.style === st ? "on" : ""}
+              onClick={() => change((x) => setCaptions(x, { on: true, style: st }))}
+            >
+              {st === "bold" ? "Bold" : "Clean"}
+            </button>
+          ))}
+        </div>
         <button className="btn ghost" onClick={choose}>
           <FolderOpen size={16} /> Open
         </button>
@@ -338,11 +387,12 @@ export default function App() {
       <div className="main">
         <div className="panel">
           <div className="panel-head">
-            Transcript <span className="meta">Click a word to jump there. Select words and press ⌫ to cut.</span>
+            Transcript <span className="meta">Select words, then ⌫ to cut or Z to zoom in.</span>
           </div>
           <Transcript
             words={words}
             kinds={kinds}
+            zooms={zoomKinds}
             current={current}
             selection={selection}
             onSelect={(s) => {
@@ -353,13 +403,35 @@ export default function App() {
             onSeekWord={seekWord}
             onCut={(s) => (change((x) => cutWords(x, s.first, s.last)), setSelection(null))}
             onRestore={(s) => (change((x) => restoreWords(x, s.first, s.last)), setSelection(null))}
+            onZoom={(s) => toggleZoom(s.first, s.last)}
           />
         </div>
 
         <div className="viewer">
           <div className="screen">
-            <video ref={videoA} src={project.url} />
-            <video ref={videoB} src={project.url} />
+            <div
+              className="frame"
+              style={{ width: `min(100cqw, calc(100cqh * ${project.info.width || 16} / ${project.info.height || 9}))`, aspectRatio: `${project.info.width || 16} / ${project.info.height || 9}` }}
+            >
+              <div
+                className="zoomer"
+                style={zoom ? { transform: `scale(${zoom.scale})`, transformOrigin: `${zoom.x * 100}% ${zoom.y * 100}%` } : undefined}
+              >
+                <video ref={videoA} src={project.url} />
+                <video ref={videoB} src={project.url} />
+              </div>
+              {cue && !showingRemoved && (
+                <div className={`caption ${captions.style}`}>
+                  <span>
+                    {cue.words.map((w, i) => (
+                      <span key={i} className={i === cue.active ? "said" : ""}>
+                        {w}{" "}
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              )}
+            </div>
             {showingRemoved && !state.playing && <span className="badge">Cut from the edit</span>}
           </div>
           <div className="transport">
@@ -404,6 +476,14 @@ export default function App() {
               onAccept={(i) => change((x) => setAgentStatus(x, i, "accepted"))}
               onRestore={(i) => change((x) => setAgentStatus(x, i, "restored"))}
               onUndo={(i) => change((x) => setAgentStatus(x, i, "pending"))}
+              zooms={edits.zooms ?? []}
+              onZoomFocus={(i) => {
+                player.current?.pause();
+                player.current?.seekSource(Math.max(0, words[edits.zooms![i].first].start - 0.5));
+              }}
+              onZoomAccept={(i) => change((x) => setZoomStatus(x, i, "accepted"))}
+              onZoomRemove={(i) => change((x) => setZoomStatus(x, i, "restored"))}
+              onZoomUndo={(i) => change((x) => setZoomStatus(x, i, "pending"))}
             />
           ) : (
             <Chat
@@ -428,6 +508,9 @@ export default function App() {
         playing={state.playing}
         claudeJoins={claudeJoins}
         fps={project.info.fps}
+        words={words}
+        zooms={edits.zooms ?? []}
+        onZoomEdit={(i, first, last) => change((x) => moveZoom(x, i, first, last))}
         onScrub={(t) => player.current?.seek(t)}
       />
 

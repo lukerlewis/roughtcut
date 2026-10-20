@@ -1,7 +1,7 @@
 // Talks to the Rust core. In a plain browser (vite dev, UI tests) it falls
 // back to fixtures under /fixtures so the UI can be worked on without the app.
 
-import type { Decisions, Edits, Word } from "./edl";
+import type { CaptionStyle, Cue, Decisions, Edits, Segment, Word } from "./edl";
 
 export interface Opened {
   source: string;
@@ -89,12 +89,18 @@ export async function waveform(path: string, folder: string): Promise<Uint8Array
   return new Uint8Array(await invoke<number[]>("waveform", { path, folder }));
 }
 
-export async function exportCut(source: string, ranges: [number, number][], dest: string): Promise<void> {
+/** Renders the cut: the kept pieces (some zoomed) and, if on, burned-in captions. */
+export async function exportCut(
+  source: string,
+  segments: Segment[],
+  captions: { style: CaptionStyle; cues: Cue[] } | null,
+  dest: string,
+): Promise<void> {
   if (!inApp) {
     await new Promise((r) => setTimeout(r, 400));
     return;
   }
-  return invoke("export", { source, ranges, dest });
+  return invoke("export", { source, segments, captions, dest });
 }
 
 // --- Claude in the sidebar -------------------------------------------------
@@ -162,6 +168,15 @@ async function mockClaude(_prompt: string) {
         if (edits) {
           edits.agent.push({ first: c.input.from, last: c.input.to, reason: c.input.reason, status: "pending" });
           edits.log.push({ at: new Date().toISOString(), by: "agent", op: "cut", first: c.input.from, last: c.input.to, note: c.input.reason });
+          localStorage.setItem("roughcut-edits", JSON.stringify(edits));
+        }
+      }
+      if (c.type === "tool_use" && (c.name === "mcp__roughcut__zoom_in" || c.name === "mcp__roughcut__set_captions")) {
+        const edits = JSON.parse(localStorage.getItem("roughcut-edits") ?? "null");
+        if (edits) {
+          if (c.name.endsWith("zoom_in"))
+            (edits.zooms ??= []).push({ first: c.input.from, last: c.input.to, scale: c.input.scale ?? 1.3, x: 0.5, y: 0.4, by: "agent", status: "pending", reason: c.input.reason });
+          else edits.captions = { on: c.input.on, style: c.input.style ?? "bold" };
           localStorage.setItem("roughcut-edits", JSON.stringify(edits));
         }
       }

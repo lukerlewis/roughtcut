@@ -72,6 +72,35 @@ fn tools() -> Value {
             },
         },
         {
+            "name": "zoom_in",
+            "description": "Punch in on words from..to: the frame scales up, centred a little above the middle (on Luke's face), for exactly while those words play. Good for emphasis on a key line or to hide a jump cut. Shows to Luke as your unreviewed zoom until he keeps or removes it; he can drag it on the timeline.",
+            "inputSchema": {
+                "type": "object",
+                "properties": range(json!({
+                    "scale": { "type": "number", "description": "How far in: 1.15 subtle, 1.3 normal (default), 1.6 strong. 1.05 to 2." },
+                    "reason": { "type": "string", "description": "A few words on why, shown to Luke." },
+                })),
+                "required": ["from", "to", "reason"],
+            },
+        },
+        {
+            "name": "remove_zoom",
+            "description": "Take out any zooms overlapping words from..to.",
+            "inputSchema": { "type": "object", "properties": range(json!({})), "required": ["from", "to"] },
+        },
+        {
+            "name": "set_captions",
+            "description": "Turn burned-in captions on or off. They follow the kept words automatically. Styles: \"bold\" (big capitals, the spoken word highlighted, for social clips) or \"clean\" (smaller sentence case on a soft box).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "on": { "type": "boolean" },
+                    "style": { "type": "string", "enum": ["bold", "clean"] },
+                },
+                "required": ["on"],
+            },
+        },
+        {
             "name": "restore_words",
             "description": "Put words from..to back into the video, whoever cut them. Any of your cuts touching the range is restored whole.",
             "inputSchema": { "type": "object", "properties": range(json!({})), "required": ["from", "to"] },
@@ -110,6 +139,33 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             let after = edits::kept_length(&words, &edits::kinds(n, &e), duration);
             let verb = if name == "cut_words" { "Cut" } else { "Restored" };
             Ok(format!("{verb} {a}-{b}: \"{}\". The cut is now {after:.1}s (was {before:.1}s).", text(a, b)))
+        }
+        "zoom_in" | "remove_zoom" => {
+            let (a, b) = (index(args, "from", n)?, index(args, "to", n)?);
+            if a > b {
+                return Err("`from` must not be after `to`".into());
+            }
+            let msg = if name == "zoom_in" {
+                let reason = args["reason"].as_str().filter(|r| !r.trim().is_empty()).ok_or("Give a short `reason`.")?;
+                let scale = args["scale"].as_f64().unwrap_or(1.3);
+                edits::zoom(&mut e, a, b, scale, reason.trim())?;
+                format!("Zoomed in on {a}-{b}: \"{}\" at {:.0}%.", text(a, b), scale.clamp(1.05, 2.0) * 100.0)
+            } else {
+                let n = edits::unzoom(&mut e, a, b);
+                format!("Removed {n} zoom(s) around {a}-{b}.")
+            };
+            edits::save(folder, &e)?;
+            Ok(msg)
+        }
+        "set_captions" => {
+            let on = args["on"].as_bool().ok_or("`on` must be true or false")?;
+            let style = args["style"].as_str().or(e.captions.as_ref().map(|c| c.style.as_str())).unwrap_or("bold").to_string();
+            if style != "bold" && style != "clean" {
+                return Err("`style` is \"bold\" or \"clean\"".into());
+            }
+            edits::set_captions(&mut e, on, &style);
+            edits::save(folder, &e)?;
+            Ok(if on { format!("Captions are on, {style} style.") } else { "Captions are off.".into() })
         }
         other => Err(format!("No tool called {other}")),
     }
@@ -151,6 +207,21 @@ fn describe(words: &[edits::Word], e: &edits::Edits, duration: f64) -> String {
         s += &format!("[{i}-{j}] {} {head}: {text}\n", clock(words[i].start));
         i = j + 1;
     }
+    let live: Vec<_> = e.zooms.iter().filter(|z| z.status.as_deref() != Some("restored")).collect();
+    s += "\nZooms: ";
+    if live.is_empty() {
+        s += "none\n";
+    } else {
+        s += "\n";
+        for z in live {
+            let who = if z.by == "you" { "Luke's".to_string() } else { format!("yours, {}", z.status.as_deref().unwrap_or("pending")) };
+            s += &format!("[{}-{}] {:.0}% ({who}) {}\n", z.first, z.last, z.scale * 100.0, z.reason.as_deref().unwrap_or(""));
+        }
+    }
+    s += &match &e.captions {
+        Some(c) if c.on => format!("Captions: on, {} style\n", c.style),
+        _ => "Captions: off\n".into(),
+    };
     let restored: Vec<_> = e.agent.iter().filter(|c| c.status == "restored").collect();
     if !restored.is_empty() {
         s += "\nCuts of yours that Luke put back (don't cut these again unless he asks):\n";
@@ -187,7 +258,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 3);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 6);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");
@@ -202,6 +273,14 @@ mod tests {
         rpc(&dir, "tools/call", json!({ "name": "restore_words", "arguments": { "from": 1, "to": 1 } }));
         let saved: Value = serde_json::from_str(&fs::read_to_string(dir.join("edits.json")).unwrap()).unwrap();
         assert_eq!(saved["agent"][0]["status"], "restored");
+
+        let z = rpc(&dir, "tools/call", json!({ "name": "zoom_in", "arguments": { "from": 2, "to": 4, "reason": "key line" } }));
+        assert!(z["content"][0]["text"].as_str().unwrap().contains("at 130%"), "{z}");
+        rpc(&dir, "tools/call", json!({ "name": "set_captions", "arguments": { "on": true } }));
+        let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
+        let text = edit["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("[2-4] 130% (yours, pending) key line"), "{text}");
+        assert!(text.contains("Captions: on, bold style"), "{text}");
 
         let bad = rpc(&dir, "tools/call", json!({ "name": "cut_words", "arguments": { "from": 3, "to": 99, "reason": "x" } }));
         assert_eq!(bad["isError"], true);

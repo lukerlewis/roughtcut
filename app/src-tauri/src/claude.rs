@@ -13,14 +13,22 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct Running(pub Mutex<Option<Child>>);
 
-pub const TOOLS: [&str; 3] = ["mcp__roughcut__get_edit", "mcp__roughcut__cut_words", "mcp__roughcut__restore_words"];
+pub const TOOLS: [&str; 6] = [
+    "mcp__roughcut__get_edit",
+    "mcp__roughcut__cut_words",
+    "mcp__roughcut__restore_words",
+    "mcp__roughcut__zoom_in",
+    "mcp__roughcut__remove_zoom",
+    "mcp__roughcut__set_captions",
+];
 
 fn brief(recording: &str) -> String {
     format!(
         "You are Claude inside Roughcut, Luke's video editor, talking with him in the app's sidebar while he watches \
          his video \"{recording}\". You can read and change the edit with the roughcut tools: call get_edit first, \
-         then cut or restore by word index. Your cuts show to Luke in blue as unreviewed until he keeps or restores \
-         them, so make the change he asks for rather than describing it, and give each cut a reason of a few words. \
+         then cut or restore words, zoom in on words, or turn captions on, all by word index. Your cuts and zooms show to Luke in blue as unreviewed until he keeps or restores \
+         them, so make the change he asks for rather than describing it, and give each one a reason of a few words. You can't change the picture in other ways yet (backgrounds, text, \
+         music): say so plainly if asked. \
          Don't re-cut anything he restored unless he asks. Luke isn't technical: reply in a sentence or two of plain \
          English, and give times like 00:12 so he can find things."
     )

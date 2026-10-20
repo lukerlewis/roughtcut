@@ -1,4 +1,4 @@
-import { RotateCcw, Scissors } from "lucide-react";
+import { RotateCcw, Scissors, ZoomIn, ZoomOut } from "lucide-react";
 import { memo, useEffect, useMemo, useRef } from "react";
 import { timecode, type CutKind, type Word } from "../lib/edl";
 
@@ -10,12 +10,14 @@ export interface Selection {
 interface Props {
   words: Word[];
   kinds: CutKind[];
+  zooms: ("zoom" | "zoom-pending" | null)[];
   current: number; // word under the playhead
   selection: Selection | null;
   onSelect: (s: Selection | null) => void;
   onSeekWord: (i: number) => void;
   onCut: (s: Selection) => void;
   onRestore: (s: Selection) => void;
+  onZoom: (s: Selection) => void;
 }
 
 const PARAGRAPH_PAUSE = 1.0;
@@ -36,12 +38,13 @@ const Para = memo(function Para(props: {
   idx: number[];
   words: Word[];
   kinds: CutKind[];
+  zooms: ("zoom" | "zoom-pending" | null)[];
   current: number;
   sel: Selection | null;
   onDown: (i: number, shift: boolean) => void;
   onEnter: (i: number) => void;
 }) {
-  const { idx, words, kinds, current, sel } = props;
+  const { idx, words, kinds, zooms, current, sel } = props;
   return (
     <p>
       <span className="stamp">{timecode(words[idx[0]].start)}</span>
@@ -51,6 +54,7 @@ const Para = memo(function Para(props: {
           "w",
           k ? "cut" : "",
           k ?? "",
+          zooms[i] ?? "",
           words[i].text.startsWith("[") ? "hes" : "",
           sel && i >= sel.first && i <= sel.last ? "sel" : "",
           i === current ? "now" : "",
@@ -127,6 +131,7 @@ export function Transcript(p: Props) {
   const anyKept = selKinds.some((k) => k === null);
   const anyCut = selKinds.some((k) => k !== null);
   const n = sel ? sel.last - sel.first + 1 : 0;
+  const zoomed = sel ? p.zooms.slice(sel.first, sel.last + 1).some((z) => z !== null) : false;
 
   return (
     <div className="transcript-wrap">
@@ -141,6 +146,9 @@ export function Transcript(p: Props) {
               <RotateCcw size={14} /> Restore
             </button>
           )}
+          <button className="btn" onClick={() => p.onZoom(sel)}>
+            {zoomed ? <ZoomOut size={14} /> : <ZoomIn size={14} />} {zoomed ? "Unzoom" : "Zoom"} <span className="mono">Z</span>
+          </button>
           {anyKept && (
             <button className="btn" onClick={() => p.onCut(sel)}>
               <Scissors size={14} /> Cut <span className="mono">⌫</span>
@@ -156,6 +164,7 @@ export function Transcript(p: Props) {
               idx={idx}
               words={p.words}
               kinds={p.kinds}
+              zooms={p.zooms}
               current={idx.includes(p.current) ? p.current : -1}
               sel={sel && sel.last >= idx[0] && sel.first <= idx[idx.length - 1] ? sel : null}
               onDown={onDown}

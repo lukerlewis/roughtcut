@@ -28,12 +28,40 @@ pub struct Span {
     pub last: usize,
 }
 
+/// A punch-in on words first..last, scaled about (x, y) as fractions of the frame.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub struct Zoom {
+    pub first: usize,
+    pub last: usize,
+    pub scale: f64,
+    pub x: f64,
+    pub y: f64,
+    pub by: String, // you | agent
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>, // Claude's: pending | accepted | restored (removed)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub struct Captions {
+    pub on: bool,
+    pub style: String, // bold | clean
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Edits {
     pub version: u32,
     pub agent: Vec<AgentCut>,
     pub user: Vec<Span>,
     pub log: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zooms: Vec<Zoom>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captions: Option<Captions>,
+    /// Anything a newer app version added, kept as is.
+    #[serde(flatten)]
+    pub other: serde_json::Map<String, Value>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -71,7 +99,7 @@ pub fn load(folder: &Path) -> Result<Edits, String> {
             status: "pending".into(),
         })
         .collect();
-    Ok(Edits { version: 1, agent, user: vec![], log: vec![] })
+    Ok(Edits { version: 1, agent, user: vec![], log: vec![], zooms: vec![], captions: None, other: Default::default() })
 }
 
 pub fn save(folder: &Path, e: &Edits) -> Result<(), String> {
@@ -137,6 +165,55 @@ pub fn restore(e: &mut Edits, first: usize, last: usize) {
     log(e, "restore", first, last, None);
 }
 
+/// Claude zooms in on first..last. Overlapping zooms that aren't Luke's are replaced.
+pub fn zoom(e: &mut Edits, first: usize, last: usize, scale: f64, reason: &str) -> Result<(), String> {
+    if e.zooms.iter().any(|z| z.by == "you" && z.first <= last && z.last >= first) {
+        return Err("Luke already zoomed in there; change it only if he asks, using remove_zoom first.".into());
+    }
+    e.zooms.retain(|z| z.status.as_deref() == Some("restored") || z.last < first || z.first > last);
+    e.zooms.push(Zoom {
+        first,
+        last,
+        scale: scale.clamp(1.05, 2.0),
+        x: 0.5,
+        y: 0.4,
+        by: "agent".into(),
+        status: Some("pending".into()),
+        reason: Some(reason.into()),
+    });
+    e.zooms.sort_by_key(|z| z.first);
+    log(e, "zoom", first, last, Some(reason));
+    Ok(())
+}
+
+/// Takes out zooms overlapping first..last; Claude's stay listed as removed.
+pub fn unzoom(e: &mut Edits, first: usize, last: usize) -> usize {
+    let hit = |z: &Zoom| z.status.as_deref() != Some("restored") && z.first <= last && z.last >= first;
+    let n = e.zooms.iter().filter(|z| hit(z)).count();
+    e.zooms = e
+        .zooms
+        .drain(..)
+        .filter_map(|mut z| {
+            if !hit(&z) {
+                Some(z)
+            } else if z.by == "agent" {
+                z.status = Some("restored".into());
+                Some(z)
+            } else {
+                None
+            }
+        })
+        .collect();
+    log(e, "unzoom", first, last, None);
+    n
+}
+
+pub fn set_captions(e: &mut Edits, on: bool, style: &str) {
+    e.captions = Some(Captions { on, style: style.into() });
+    let op = if on { format!("captions-{style}") } else { "captions-off".into() };
+    e.log.push(serde_json::json!({ "at": now(), "by": "agent", "op": op }));
+}
+
 /// Who cut each word. Luke's own cuts win.
 pub fn kinds(n: usize, e: &Edits) -> Vec<Kind> {
     let mut k = vec![Kind::Kept; n];
@@ -187,7 +264,7 @@ mod tests {
 
     #[test]
     fn restore_splits_your_cuts_and_restores_claudes_whole() {
-        let mut e = Edits { version: 1, agent: vec![], user: vec![Span { first: 2, last: 8 }], log: vec![] };
+        let mut e = Edits { user: vec![Span { first: 2, last: 8 }], ..empty() };
         cut(&mut e, 10, 12, "filler");
         restore(&mut e, 4, 5);
         restore(&mut e, 11, 11);
@@ -200,12 +277,37 @@ mod tests {
     #[test]
     fn kinds_and_length() {
         let w = words(10);
-        let mut e = Edits { version: 1, agent: vec![], user: vec![], log: vec![] };
+        let mut e = empty();
         let full = kept_length(&w, &kinds(10, &e), 5.0);
         cut(&mut e, 3, 5, "retake");
         let k = kinds(10, &e);
         assert_eq!(k[4], Kind::ClaudePending);
         assert!(kept_length(&w, &k, 5.0) < full - 1.0);
+    }
+
+    fn empty() -> Edits {
+        Edits { version: 1, agent: vec![], user: vec![], log: vec![], zooms: vec![], captions: None, other: Default::default() }
+    }
+
+    #[test]
+    fn zooms_and_captions_round_trip() {
+        let mut e = empty();
+        zoom(&mut e, 3, 5, 1.3, "punchline").unwrap();
+        zoom(&mut e, 4, 6, 9.0, "again").unwrap();
+        assert_eq!(e.zooms.len(), 1);
+        assert_eq!(e.zooms[0].scale, 2.0);
+        assert_eq!(unzoom(&mut e, 6, 6), 1);
+        assert_eq!(e.zooms[0].status.as_deref(), Some("restored"));
+        set_captions(&mut e, true, "clean");
+        e.other.insert("future".into(), Value::from(1));
+        let back: Edits = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(back.zooms, e.zooms);
+        assert_eq!(back.captions, e.captions);
+        assert_eq!(back.other["future"], 1);
+        // Luke's own zoom is protected.
+        let mut e = empty();
+        e.zooms.push(Zoom { first: 1, last: 2, scale: 1.3, x: 0.5, y: 0.4, by: "you".into(), status: None, reason: None });
+        assert!(zoom(&mut e, 2, 3, 1.3, "x").is_err());
     }
 
     #[test]

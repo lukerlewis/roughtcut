@@ -126,9 +126,15 @@ async fn waveform(path: String, folder: String) -> Result<Vec<u8>, String> {
 }
 
 #[tauri::command]
-async fn export(app: AppHandle, source: String, ranges: Vec<(f64, f64)>, dest: String) -> Result<(), String> {
+async fn export(
+    app: AppHandle,
+    source: String,
+    segments: Vec<media::Segment>,
+    captions: Option<media::Captions>,
+    dest: String,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        media::export(Path::new(&source), &ranges, Path::new(&dest), |done| {
+        media::export(Path::new(&source), &segments, captions.as_ref(), Path::new(&dest), |done| {
             let _ = app.emit("export-progress", done);
         })
     })

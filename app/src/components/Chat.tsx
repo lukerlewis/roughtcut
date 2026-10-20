@@ -1,4 +1,4 @@
-import { ArrowUp, BookOpen, RotateCcw, Scissors, Square } from "lucide-react";
+import { ArrowUp, BookOpen, Captions, RotateCcw, Scissors, Square, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../lib/backend";
 import { timecode, type Word } from "../lib/edl";
@@ -12,7 +12,7 @@ interface Props {
   onSeekWord: (i: number) => void;
 }
 
-const SUGGESTIONS = ["Tighten the opening", "Cut any ums you missed", "Which take of each line is best?"];
+const SUGGESTIONS = ["Tighten the opening", "Zoom in on the key moments", "Turn on bold captions"];
 
 /** What Claude did with a tool, in a line. */
 function Action({ m, words, onSeekWord }: { m: ChatMessage; words: Word[]; onSeekWord: (i: number) => void }) {
@@ -25,13 +25,26 @@ function Action({ m, words, onSeekWord }: { m: ChatMessage; words: Word[]; onSee
         <BookOpen size={13} /> Read the edit
       </div>
     );
-  const cut = m.tool === "cut_words";
+  if (m.tool === "set_captions")
+    return (
+      <div className="action quiet">
+        <Captions size={13} /> {m.input?.on === false ? "Captions off" : `Captions on (${m.input?.style === "clean" ? "clean" : "bold"})`}
+      </div>
+    );
+  const [Icon, label] =
+    m.tool === "cut_words"
+      ? [Scissors, "Cut"]
+      : m.tool === "zoom_in"
+        ? [ZoomIn, "Zoom in on"]
+        : m.tool === "remove_zoom"
+          ? [ZoomOut, "Unzoom"]
+          : [RotateCcw, "Put back"];
   return (
     <button className="action" onClick={() => words[from] && onSeekWord(from)} title="Show this in the video">
-      {cut ? <Scissors size={13} /> : <RotateCcw size={13} />}
+      <Icon size={13} />
       <span className="what">
-        {cut ? "Cut" : "Put back"} <span className="words">{span}</span>
-        {cut && m.input?.reason && <span className="why"> · {m.input.reason}</span>}
+        {label} <span className="words">{span}</span>
+        {m.input?.reason && <span className="why"> · {m.input.reason}</span>}
       </span>
       {words[from] && <span className="mono">{timecode(words[from].start)}</span>}
     </button>

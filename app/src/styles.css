@@ -111,8 +111,21 @@ button { font: inherit; color: inherit; }
 
 /* Viewer. */
 .viewer { display: flex; flex-direction: column; background: var(--background); min-width: 0; }
-.screen { flex: 1; position: relative; min-height: 0; background: #000; margin: 12px 12px 0; border-radius: 8px; overflow: hidden; }
+.screen {
+  flex: 1; position: relative; min-height: 0; background: #000; margin: 12px 12px 0; border-radius: 8px; overflow: hidden;
+  display: grid; place-items: center; container-type: size;
+}
+.frame { position: relative; overflow: hidden; container-type: size; }
+.zoomer { position: absolute; inset: 0; transition: transform 240ms var(--ease); }
 .screen video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.caption { position: absolute; left: 6%; right: 6%; text-align: center; pointer-events: none; line-height: 1.2; }
+.caption.bold {
+  bottom: 12%; font: 700 6.5cqh "Helvetica Neue", Helvetica, Arial, sans-serif; text-transform: uppercase; color: #fff;
+  text-shadow: 0 0 0.6cqh #000, 0.3cqh 0.3cqh 0 #000, -0.3cqh 0.3cqh 0 #000, 0.3cqh -0.3cqh 0 #000, -0.3cqh -0.3cqh 0 #000;
+}
+.caption.bold .said { color: #ffd60a; }
+.caption.clean { bottom: 7%; font: 500 4.5cqh "Helvetica Neue", Helvetica, Arial, sans-serif; color: #fff; }
+.caption.clean > span { background: rgba(0, 0, 0, 0.5); padding: 0.4cqh 1.2cqh; border-radius: 0.8cqh; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .screen .badge {
   position: absolute; left: 10px; top: 10px; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 500;
   background: rgba(0, 0, 0, 0.6); color: #f5f5f5; border: 1px solid rgba(255, 255, 255, 0.15);
@@ -130,6 +143,8 @@ button { font: inherit; color: inherit; }
 .w.cut { text-decoration: line-through; color: var(--disabled); }
 .w.cut.agent-pending { color: var(--unread); text-decoration-color: var(--unread); }
 .w.hes { font-style: italic; }
+.w.zoom { text-decoration: underline dotted var(--muted-foreground); text-underline-offset: 4px; }
+.w.zoom-pending { text-decoration: underline dotted var(--unread); text-underline-offset: 4px; }
 .w.sel { background: var(--selected); color: var(--foreground); }
 .w.sel.cut.agent-pending { background: color-mix(in srgb, var(--unread) 22%, transparent); }
 .w.now { box-shadow: inset 0 -2px 0 var(--foreground); color: var(--ink); }
@@ -205,7 +220,7 @@ button.action:hover { background: var(--muted); }
 .timeline { border-top: 1px solid var(--border); background: var(--sidebar); display: flex; flex-direction: column; }
 .timeline-head { height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--border); }
 .timeline-head .meta { font-size: 12px; color: var(--muted-foreground); }
-.timeline canvas { display: block; width: 100%; height: 150px; cursor: default; }
+.timeline canvas { display: block; width: 100%; height: 172px; cursor: default; }
 
 /* Empty, working and export states. */
 .empty { display: grid; place-items: center; height: 100%; text-align: center; padding: 24px; }
@@ -225,3 +240,13 @@ button.action:hover { background: var(--muted); }
 .bar > div { height: 100%; background: var(--foreground); transition: width 160ms linear; }
 @keyframes fade { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } .btn:active { transform: none; } }
+
+/* Segmented control (captions). */
+.seg { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--muted); }
+.seg button {
+  height: 24px; display: flex; align-items: center; gap: 5px; padding: 0 8px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--muted-foreground); font: inherit; font-size: 12px; cursor: default;
+}
+.seg button svg { color: var(--icon); }
+.seg button:hover { color: var(--foreground); }
+.seg button.on { background: var(--card); color: var(--foreground); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }

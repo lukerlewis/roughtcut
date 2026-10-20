@@ -11,6 +11,15 @@ import {
   setAgentStatus,
   sourceToCut,
   wordAt,
+  addZoom,
+  removeZooms,
+  segments,
+  captionCues,
+  cueAt,
+  liveZooms,
+  pendingCount,
+  setZoomStatus,
+  type Edits,
   type Word,
 } from "./edl";
 
@@ -91,4 +100,45 @@ it("finds the word at a time", () => {
   expect(wordAt(SAMPLE, 0.5)).toBe(-1);
   expect(wordAt(SAMPLE, 1.25)).toBe(1);
   expect(wordAt(SAMPLE, 3.5)).toBe(6);
+});
+
+describe("zooms", () => {
+  const base: Edits = { version: 1, agent: [], user: [], log: [] };
+  it("split kept ranges where a zoom starts and ends", () => {
+    const e = addZoom(base, 8, 10);
+    const ranges = keptRanges(SAMPLE, keptSet(SAMPLE.length, e), 6);
+    const segs = segments(ranges, SAMPLE, liveZooms(e));
+    const zoomed = segs.filter((s) => s.zoom);
+    expect(zoomed).toHaveLength(1);
+    expect(zoomed[0].start).toBeCloseTo(4.2 - 0.08);
+    expect(zoomed[0].end).toBeCloseTo(5.0 + 0.15);
+    // Pieces still cover exactly the kept ranges.
+    expect(segs.reduce((n, s) => n + s.end - s.start, 0)).toBeCloseTo(ranges.reduce((n, [a, b]) => n + b - a, 0));
+  });
+  it("adding replaces overlaps, removing keeps Claude's as removed", () => {
+    let e: Edits = { ...base, zooms: [{ first: 2, last: 4, scale: 1.3, x: 0.5, y: 0.4, by: "agent", status: "pending", reason: "emphasis" }] };
+    expect(pendingCount(e)).toBe(1);
+    e = setZoomStatus(e, 0, "accepted");
+    expect(pendingCount(e)).toBe(0);
+    e = removeZooms(e, 3, 3);
+    expect(e.zooms![0].status).toBe("restored");
+    expect(liveZooms(e)).toHaveLength(0);
+    e = addZoom(e, 0, 1);
+    e = addZoom(e, 1, 2);
+    expect(liveZooms(e).map((z) => [z.first, z.last])).toEqual([[1, 2]]);
+  });
+});
+
+describe("captions", () => {
+  it("cover the kept words in short lines that break at cuts and sentence ends", () => {
+    const e = fromDecisions(decisions);
+    const keep = keptSet(SAMPLE.length, e);
+    const ranges = keptRanges(SAMPLE, keep, 6);
+    const cues = captionCues(SAMPLE, keep, ranges);
+    const lines = [...new Set(cues.map((c) => c.words.join(" ")))];
+    expect(lines).toEqual(["The rule was simple.", "It goes."]);
+    expect(cues).toHaveLength(6);
+    expect(cueAt(cues, cues[1].start + 0.01)?.active).toBe(1);
+    for (let i = 1; i < cues.length; i++) expect(cues[i].start).toBeGreaterThanOrEqual(cues[i - 1].end - 1e-9);
+  });
 });
