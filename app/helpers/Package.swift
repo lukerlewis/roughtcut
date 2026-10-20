@@ -7,5 +7,6 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(name: "roughcut-matte", path: "Sources/roughcut-matte"),
+        .executableTarget(name: "roughcut-recorder", path: "Sources/roughcut-recorder"),
     ]
 )

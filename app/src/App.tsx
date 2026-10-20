@@ -1,8 +1,10 @@
-import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, MessageSquarePlus, Mic, Scissors, SkipBack, Type } from "lucide-react";
+import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, EyeOff, Gauge, MessageSquarePlus, Mic, Plus, User, ZoomIn, Scissors, SkipBack, Type } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
 import { Style } from "./components/Style";
+import { Record } from "./components/Record";
+import { Menu } from "./components/Menu";
 import { Effect, type Look } from "./components/Effect";
 import { Timeline, type Effect as Picked } from "./components/Timeline";
 import { Transcript, type Selection } from "./components/Transcript";
@@ -136,12 +138,21 @@ export default function App() {
       backend.listen<number>("export-progress", (progress) => setExporting((x) => (x ? { ...x, progress } : x))),
       backend.onDrop((paths) => paths[0] && open(paths[0])),
       backend.listen<string>("open-file", (path) => open(path)),
+      backend.listen("recording-saving", () => setRecording("saving")),
+      backend.listen<{ path?: string; error?: string }>("recording-finished", (r) => {
+        setRecording(null);
+        if (r.path) open(r.path);
+        else setPhase({ kind: "error", message: r.error ?? "The recording didn't save." });
+      }),
     ];
     backend.launchFile().then((path) => {
       if (path) open(path);
     });
     return () => offs.forEach((o) => o.then((f) => f()));
   }, [open]);
+
+  // Recording: choosing, recording, then "saving" while the parts are put together.
+  const [recording, setRecording] = useState<"open" | "saving" | null>(null);
 
   const choose = async () => {
     const path = await backend.chooseRecording();
@@ -699,13 +710,19 @@ export default function App() {
             <div className={`drop ${dragOver ? "over" : ""}`}>
               <h1>Drop a recording here</h1>
               <p>It opens just as you recorded it. Cut it yourself, ask Claude, or click Rough cut when you want Claude's suggestions.</p>
-              <button className="btn primary" onClick={choose}>
-                <FolderOpen size={16} /> Open recording…
-              </button>
+              <div className="actions">
+                <button className="btn primary" onClick={choose}>
+                  <FolderOpen size={16} /> Open recording…
+                </button>
+                <button className="btn" onClick={() => setRecording("open")}>
+                  <Circle size={16} /> Record
+                </button>
+              </div>
               {phase.kind === "error" && <p className="error" style={{ marginTop: 16 }}>{phase.message}</p>}
             </div>
           )}
         </div>
+        {recording && <Record saving={recording === "saving"} onClose={() => setRecording(null)} />}
       </div>
     );
   }
@@ -725,38 +742,53 @@ export default function App() {
         <span className="spacer" data-tauri-drag-region />
         <Updates />
         <button className="btn ghost" onClick={roughCut} disabled={!!cutting} title="Claude suggests cuts (fillers, retakes, long pauses) for you to review">
-          <Scissors size={16} /> Rough cut
+          <Scissors size={16} /> <span className="lbl">Rough cut</span>
         </button>
-        <button className="btn ghost" onClick={newText} title="Add a title over the selected words or at the playhead (T)">
-          <Type size={16} /> Text
+        <Menu
+          label={
+            <>
+              <Plus size={16} /> <span className="lbl">Add</span>
+            </>
+          }
+          title="Add an effect over the selected words, or at the playhead"
+          items={[
+            { label: "Text", icon: <Type size={14} />, key: "T", onClick: newText },
+            { label: "Note", icon: <MessageSquarePlus size={14} />, key: "N", onClick: newNote },
+            { label: "Zoom", icon: <ZoomIn size={14} />, key: "Z", disabled: !selection, onClick: () => selection && toggleZoom(selection.first, selection.last) },
+            { label: "Speed-up", icon: <Gauge size={14} />, key: "S", onClick: () => newTimed("speed") },
+            { label: "Blur", icon: <EyeOff size={14} />, key: "B", onClick: () => newTimed("blur") },
+            { label: "Background", icon: <User size={14} />, key: "G", onClick: newBackground },
+          ]}
+        />
+        <Menu
+          label={
+            <>
+              <CaptionsIcon size={16} /> <span className="lbl">Captions</span>
+            </>
+          }
+          items={[
+            { label: "No captions", on: !captions.on, onClick: () => change((x) => setCaptions(x, { ...captions, on: false })) },
+            { label: "Bold", on: captions.on && captions.style === "bold", onClick: () => change((x) => setCaptions(x, { on: true, style: "bold" })) },
+            { label: "Clean", on: captions.on && captions.style === "clean", onClick: () => change((x) => setCaptions(x, { on: true, style: "clean" })) },
+          ]}
+        />
+        <Menu
+          label={
+            <>
+              <Mic size={16} /> <span className="lbl">Voice</span>
+            </>
+          }
+          title="Polished evens out loudness and cleans up hiss in the export"
+          items={[
+            { label: "As recorded", on: !voiceOn, onClick: () => change((x) => setVoice(x, {})) },
+            { label: "Polished", on: voiceOn, onClick: () => change((x) => setVoice(x, { level: true, clean: true })) },
+          ]}
+        />
+        <button className="btn ghost" onClick={() => setRecording("open")} title="Record your screen, camera and voice">
+          <Circle size={16} /> <span className="lbl">Record</span>
         </button>
-        <button className="btn ghost" onClick={newNote} title="Leave a note at the playhead, for you or for Claude (N)">
-          <MessageSquarePlus size={16} /> Note
-        </button>
-        <div className="seg" title="Captions">
-          <button className={!captions.on ? "on" : ""} onClick={() => change((x) => setCaptions(x, { ...captions, on: false }))}>
-            <CaptionsIcon size={15} /> Off
-          </button>
-          {(["bold", "clean"] as const).map((st) => (
-            <button
-              key={st}
-              className={captions.on && captions.style === st ? "on" : ""}
-              onClick={() => change((x) => setCaptions(x, { on: true, style: st }))}
-            >
-              {st === "bold" ? "Bold" : "Clean"}
-            </button>
-          ))}
-        </div>
-        <div className="seg" title="Voice: polished evens out loudness and cleans up hiss in the export">
-          <button className={!voiceOn ? "on" : ""} onClick={() => change((x) => setVoice(x, {}))}>
-            <Mic size={15} /> As recorded
-          </button>
-          <button className={voiceOn ? "on" : ""} onClick={() => change((x) => setVoice(x, { level: true, clean: true }))}>
-            Polished
-          </button>
-        </div>
-        <button className="btn ghost" onClick={choose}>
-          <FolderOpen size={16} /> Open
+        <button className="btn ghost" onClick={choose} title="Open a recording">
+          <FolderOpen size={16} /> <span className="lbl">Open</span>
         </button>
         <button className="btn primary" onClick={startExport} disabled={!ranges.length}>
           <Download size={16} /> Export
@@ -994,6 +1026,8 @@ export default function App() {
         onCutPause={(start, end) => change((x) => cutSpan(x, start, end))}
         onScrub={(t) => player.current?.seek(t)}
       />
+
+      {recording && <Record saving={recording === "saving"} onClose={() => setRecording(null)} />}
 
       {cutting && (
         <div className="sheet">

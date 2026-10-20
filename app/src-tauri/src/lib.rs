@@ -8,6 +8,7 @@ mod edits;
 mod mcp;
 mod matte;
 mod media;
+mod recorder;
 mod server;
 mod style;
 mod tools;
@@ -194,6 +195,48 @@ async fn swap_background(app: AppHandle, folder: String, source: String, start: 
     .map_err(|e| e.to_string())?
 }
 
+/// The screens, cameras and mics Luke can record.
+#[tauri::command]
+async fn recording_sources() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(recorder::list).await.map_err(|e| e.to_string())?
+}
+
+/// Starts recording. When it stops (from the app or the menu bar), the parts
+/// are put together and `recording-finished` brings the video to open.
+#[tauri::command]
+async fn start_recording(app: AppHandle, screen: Option<String>, camera: Option<String>, mic: Option<String>) -> Result<String, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let folder = recorder::new_folder();
+        let state = app.state::<recorder::Recording>();
+        let child = recorder::start(&state, &folder, screen.as_deref(), camera.as_deref(), mic.as_deref())?;
+        *state.0.lock().unwrap() = Some(child.id());
+        let (app2, dir) = (app.clone(), folder.clone());
+        std::thread::spawn(move || {
+            let result = recorder::wait(child).and_then(|_| {
+                let _ = app2.emit("recording-saving", ());
+                recorder::compose(&dir)
+            });
+            *app2.state::<recorder::Recording>().0.lock().unwrap() = None;
+            let _ = app2.emit(
+                "recording-finished",
+                match result {
+                    Ok(path) => serde_json::json!({ "path": path }),
+                    Err(error) => serde_json::json!({ "error": error }),
+                },
+            );
+        });
+        Ok(folder.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn stop_recording(state: tauri::State<recorder::Recording>) -> Result<(), String> {
+    recorder::stop(&state)
+}
+
 /// Luke's rules and settings, the same for every video.
 #[tauri::command]
 fn load_style() -> Value {
@@ -307,6 +350,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Launch(Mutex::new(from_args)))
         .manage(claude::Running::default())
+        .manage(recorder::Recording::default())
         .manage(server::Server::start().expect("couldn't start the video server"))
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -323,6 +367,9 @@ pub fn run() {
             ask_claude,
             stop_claude,
             load_style,
+            recording_sources,
+            start_recording,
+            stop_recording,
             swap_background,
             save_style,
             suggest_rules,

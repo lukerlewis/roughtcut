@@ -308,3 +308,38 @@ export async function swapBackground(folder: string, source: string, start: numb
   }
   return invoke<string>("swap_background", { folder, source, start, end, background });
 }
+
+// --- Recording ---------------------------------------------------------------
+
+export interface Source {
+  id: string;
+  name: string;
+}
+
+export interface Sources {
+  screens: Source[];
+  screenAllowed: boolean;
+  cameras: Source[];
+  mics: Source[];
+}
+
+export async function recordingSources(): Promise<Sources> {
+  if (!inApp)
+    return {
+      screens: [{ id: "1", name: "Main screen" }],
+      screenAllowed: true,
+      cameras: [{ id: "cam", name: "FaceTime HD Camera" }],
+      mics: [{ id: "mic", name: "MacBook Air Microphone" }],
+    };
+  return invoke<Sources>("recording_sources");
+}
+
+/** Starts recording the chosen screen, camera and mic. Returns the folder it records into. */
+export async function startRecording(screen: string | null, camera: string | null, mic: string | null): Promise<string> {
+  if (!inApp) return "/Users/luke/Movies/Roughcut/Recording";
+  return invoke<string>("start_recording", { screen, camera, mic });
+}
+
+export async function stopRecording(): Promise<void> {
+  if (inApp) await invoke("stop_recording");
+}

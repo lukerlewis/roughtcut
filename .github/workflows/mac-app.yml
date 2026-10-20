@@ -40,7 +40,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml
-      # Small native helpers (background swap), copied into the app next to Roughcut.
+      # Small native helpers (background swap, recorder), copied into the app next to Roughcut.
       - name: Build the native helpers
         run: swift build -c release --package-path helpers
       - name: Check the background swap works
@@ -51,9 +51,12 @@ jobs:
           grep -q '^video,' "$RUNNER_TEMP/streams.txt" && grep -q '^audio,' "$RUNNER_TEMP/streams.txt"
           awk -F, '{ if ($2 < 0.9 || $2 > 1.1) exit 1 }' "$RUNNER_TEMP/streams.txt"
       # The build number is the version's last part, so the app can tell when a newer build exists.
-      - run: npx tauri build --bundles app,dmg --config '{"version":"0.1.${{ github.run_number }}","bundle":{"macOS":{"files":{"MacOS/roughcut-matte":"../helpers/.build/release/roughcut-matte"}}}}'
+      - run: npx tauri build --bundles app,dmg --config '{"version":"0.1.${{ github.run_number }}","bundle":{"macOS":{"files":{"MacOS/roughcut-matte":"../helpers/.build/release/roughcut-matte","MacOS/roughcut-recorder":"../helpers/.build/release/roughcut-recorder"}}}}'
       - name: Check the helpers are in the app
-        run: test -x src-tauri/target/release/bundle/macos/Roughcut.app/Contents/MacOS/roughcut-matte
+        run: |
+          test -x src-tauri/target/release/bundle/macos/Roughcut.app/Contents/MacOS/roughcut-matte
+          test -x src-tauri/target/release/bundle/macos/Roughcut.app/Contents/MacOS/roughcut-recorder
+          /usr/libexec/PlistBuddy -c "Print :NSCameraUsageDescription" src-tauri/target/release/bundle/macos/Roughcut.app/Contents/Info.plist
       # Ad-hoc signed, so macOS offers "Open Anyway" instead of calling a download "damaged".
       - name: Check the app is signed
         run: codesign --verify --deep --strict --verbose=2 src-tauri/target/release/bundle/macos/Roughcut.app
