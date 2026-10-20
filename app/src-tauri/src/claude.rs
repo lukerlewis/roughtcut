@@ -13,7 +13,7 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct Running(pub Mutex<Option<Child>>);
 
-pub const TOOLS: [&str; 30] = [
+pub const TOOLS: [&str; 32] = [
     "mcp__roughcut__get_edit",
     "mcp__roughcut__cut_words",
     "mcp__roughcut__restore_words",
@@ -44,6 +44,8 @@ pub const TOOLS: [&str; 30] = [
     "mcp__roughcut__get_graphic",
     "mcp__roughcut__update_graphic",
     "mcp__roughcut__remove_graphic",
+    "mcp__roughcut__list_skills",
+    "mcp__roughcut__save_skill",
 ];
 
 /// Built-in tools for making clips: FFmpeg and Python to render them, and
@@ -68,7 +70,8 @@ fn brief(recording: &str) -> String {
          Luke can pin notes to moments; get_edit lists them. When he sends you notes, deal with each one, then mark it done \
          with resolve_note and a short reply. To point something out for him to decide, leave a note with add_note.\n\n\
          When Luke says to always or never do something in his videos, save it as a rule with add_rule (in his voice, one line), \
-         then apply it here too.\n\n\
+         then apply it here too. When he asks to make a way of editing reusable (\"make that a skill\"), save it with save_skill: it becomes \
+         a checkbox when he presses Rough cut.\n\n\
          Luke can keep named versions of the edit: save_version saves the current one, open_version switches to one. \
          When he asks for alternatives (other openings, a tighter cut), save each as its own version and finish on the edit he started from.\n\n\
          Don't re-cut anything he restored unless he asks. Luke isn't technical: reply in a sentence or two of plain \

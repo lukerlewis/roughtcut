@@ -42,7 +42,7 @@ pub fn budget(level: &str, seconds: f64) -> usize {
     }
 }
 
-fn prompt(folder: &Path) -> Result<Option<(String, usize)>, String> {
+fn prompt(folder: &Path, guidance: Option<&str>) -> Result<Option<(String, usize)>, String> {
     let words = edits::load_words(folder)?;
     let e = edits::load(folder)?;
     let kinds = edits::kinds(words.len(), &e);
@@ -82,8 +82,9 @@ fn prompt(folder: &Path) -> Result<Option<(String, usize)>, String> {
          Pick at most {most}, fewer is better, and none at all if nothing would help; never two within 10 seconds or two that say the same thing.\n\n\
          For each, `from`/`to` are the word numbers it should sit over, `catalog` is the best fitting graphic from this list (Luke's own, group Yours, come first: prefer them when they fit; or \"\" if none fits and a new one \
          must be made, which is costly, so only for something clearly worth it), `idea` says in a few words what it shows using the actual words or numbers said \
-         (\"30 days, big\"), and `why` is one short sentence for Luke.\n\nCatalogue:\n{}\n\n{}{}{}",
+         (\"30 days, big\"), and `why` is one short sentence for Luke.\n\n{}Catalogue:\n{}\n\n{}{}{}",
         transcript(&words, &kinds),
+        guidance.map(str::trim).filter(|g| !g.is_empty()).map(|g| format!("Luke's guidance for graphics (his Add graphics skill): {g}\n\n")).unwrap_or_default(),
         catalogue.join("\n"),
         if placed.is_empty() { String::new() } else { format!("Already on screen (don't repeat):\n{}\n\n", placed.join("\n")) },
         if history.is_empty() { String::new() } else { format!("What Luke kept and removed before (follow his taste):\n{history}\n") },
@@ -93,8 +94,8 @@ fn prompt(folder: &Path) -> Result<Option<(String, usize)>, String> {
 }
 
 /// Spotting: the moments worth a graphic, as [{from, to, catalog, idea, why}].
-pub fn spot(folder: &Path) -> Result<Value, String> {
-    let Some((p, most)) = prompt(folder)? else { return Ok(json!([])) };
+pub fn spot(folder: &Path, guidance: Option<&str>) -> Result<Value, String> {
+    let Some((p, most)) = prompt(folder, guidance)? else { return Ok(json!([])) };
     let words = edits::load_words(folder)?.len();
     let answer = style::ask_json(folder, "sonnet", SCHEMA, &p)?;
     Ok(clean(&answer["moments"], words, most))

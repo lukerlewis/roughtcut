@@ -421,3 +421,26 @@ body.dragging-fx, body.dragging-fx * { cursor: grabbing !important; }
 .brand-sample .bar { width: 4px; border-radius: 2px; }
 .brand-sample > span:last-child { display: flex; flex-direction: column; gap: 2px; font-size: 15px; }
 .brand-sample > span:last-child span { font-size: 12px; opacity: 0.7; }
+
+/* Rough cut: the skills to run, as a checklist. */
+.sheet .card.roughcut { width: 480px; max-height: calc(100vh - 80px); overflow-y: auto; }
+.roughcut .hint { margin: 0 0 12px; }
+.roughcut .skills { display: flex; flex-direction: column; border: 1px solid var(--stroke); border-radius: 10px; background: var(--card); }
+.roughcut .skill + .skill { border-top: 1px solid var(--border); }
+.roughcut .skill-row { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 10px; min-height: 36px; }
+.roughcut .skill-name { flex: 1; font-size: 13px; color: var(--foreground); cursor: default; }
+.roughcut .skill.unusable .skill-name { color: var(--disabled); }
+.roughcut .skill-name .why { color: var(--muted-foreground); font-size: 12px; }
+.roughcut .tick {
+  width: 16px; height: 16px; flex: none; display: grid; place-items: center; padding: 0; border-radius: 4px;
+  border: 1px solid var(--stroke-strong); background: transparent; color: var(--background);
+}
+.roughcut .tick.on { background: var(--foreground); border-color: var(--foreground); }
+.roughcut .tick:disabled { border-style: dashed; }
+.roughcut .skill-details { display: flex; flex-direction: column; gap: 8px; padding: 0 10px 10px 36px; }
+.roughcut .skill-details textarea.field, .roughcut .skill-new textarea.field { height: auto; padding: 8px 10px; line-height: 1.45; resize: vertical; font-family: inherit; }
+.roughcut .skill-details .hint { margin: 0; }
+.roughcut .skill-details .actions, .roughcut .skill-new .actions { margin-top: 0; }
+.roughcut .skill-new { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.roughcut .add-skill { margin-top: 8px; }
+.roughcut .actions .grow { flex: 1; margin: 0; align-self: center; }

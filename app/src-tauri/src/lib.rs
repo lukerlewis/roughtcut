@@ -14,6 +14,7 @@ mod matte;
 mod media;
 mod recorder;
 mod server;
+mod skills;
 mod spot;
 mod style;
 mod tools;
@@ -65,7 +66,7 @@ fn open_recording(path: String) -> Result<Opened, String> {
 /// window as "roughcut-log" events. Without `cut` it only writes the words
 /// down, so the recording opens uncut.
 #[tauri::command]
-async fn run_rough_cut(app: AppHandle, path: String, cut: bool) -> Result<String, String> {
+async fn run_rough_cut(app: AppHandle, path: String, cut: bool, guidance: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let cli = tools::roughcut_cli().ok_or(
             "Can't find the roughcut command. Run the setup in your Roughcut folder first (bash scripts/setup-mac.sh).",
@@ -76,7 +77,11 @@ async fn run_rough_cut(app: AppHandle, path: String, cut: bool) -> Result<String
         if cut {
             // Luke's settings and rules shape the rough cut too.
             cmd.args(style::cut_args(&style));
-            let rules = style::rules_text(&style);
+            let mut rules = style::rules_text(&style);
+            // The cut skill's own words, as Luke last set them.
+            if let Some(g) = guidance.as_deref().map(str::trim).filter(|g| !g.is_empty()) {
+                rules += &format!("\n\nHow Luke wants the cut: {g}");
+            }
             if !rules.is_empty() {
                 cmd.env("ROUGHCUT_CLAUDE_ARGS", format!("--append-system-prompt {}", style::shell_quote(&rules)));
             }
@@ -406,13 +411,29 @@ async fn suggest_rules(folder: String) -> Result<Value, String> {
 /// "Suggest graphics", first pass: the moments worth a graphic, and what to
 /// ask the sidebar Claude to build (empty when none are).
 #[tauri::command]
-async fn spot_graphics(folder: String) -> Result<Value, String> {
+async fn spot_graphics(folder: String, guidance: Option<String>) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let moments = spot::spot(Path::new(&folder))?;
+        let moments = spot::spot(Path::new(&folder), guidance.as_deref())?;
         Ok(serde_json::json!({ "prompt": spot::build_prompt(&moments), "moments": moments }))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Luke's editing skills, for the Rough cut checklist.
+#[tauri::command]
+fn list_skills() -> Vec<Value> {
+    skills::list()
+}
+
+#[tauri::command]
+fn save_skill(id: Option<String>, name: Option<String>, text: Option<String>, on: Option<bool>, look: Option<String>) -> Result<Value, String> {
+    skills::save(id.as_deref(), name.as_deref(), text.as_deref(), on, look.as_deref())
+}
+
+#[tauri::command]
+fn remove_skill(id: String) -> Result<(), String> {
+    skills::remove(&id)
 }
 
 #[tauri::command]
@@ -552,6 +573,9 @@ pub fn run() {
             save_style,
             suggest_rules,
             spot_graphics,
+            list_skills,
+            save_skill,
+            remove_skill,
             load_chat,
             save_chat,
             check_update,

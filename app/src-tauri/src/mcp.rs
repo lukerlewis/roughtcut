@@ -330,6 +330,24 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": { "graphic": { "type": "integer" } }, "required": ["graphic"] },
         },
         {
+            "name": "list_skills",
+            "description": "Luke's editing skills: the steps he can tick when he presses Rough cut (some run by the app, the rest instructions for you), with what each says.",
+            "inputSchema": { "type": "object", "properties": {} },
+        },
+        {
+            "name": "save_skill",
+            "description": "Save an editing skill when Luke asks to make something a skill or change one: a new one (`name` and `text`, the instructions you'll follow when he ticks it), or a change to one by `id` (from list_skills). Write `text` as clear steps using the roughcut tools.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "name": { "type": "string", "description": "The checkbox label, e.g. \"Add a subscribe reminder at the end\"." },
+                    "text": { "type": "string" },
+                    "on": { "type": "boolean", "description": "Ticked by default." },
+                },
+            },
+        },
+        {
             "name": "restore_words",
             "description": "Put words from..to back into the video, whoever cut them. Any of your cuts touching the range is restored whole.",
             "inputSchema": { "type": "object", "properties": range(json!({})), "required": ["from", "to"] },
@@ -500,6 +518,11 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             }
             edits::save(folder, &e)?;
             Ok(format!("Placed \"{}\" over {a}-{b}. Luke will see it in blue until he reviews it.", name.trim()))
+        }
+        "list_skills" => Ok(crate::skills::describe()),
+        "save_skill" => {
+            let s = crate::skills::save(args["id"].as_str(), args["name"].as_str(), args["text"].as_str(), args["on"].as_bool(), None)?;
+            Ok(format!("Saved the skill \"{}\". Luke will see it when he presses Rough cut.", s["name"].as_str().unwrap_or("")))
         }
         "list_graphics" => {
             if let Some(name) = args["name"].as_str().filter(|n| !n.trim().is_empty()) {
@@ -989,7 +1012,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 30);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 32);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");

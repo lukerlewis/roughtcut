@@ -60,12 +60,12 @@ export async function openRecording(path: string): Promise<Opened> {
 }
 
 /** Transcribes the recording and, with `cut`, asks Claude for its rough cut. */
-export async function runRoughCut(path: string, cut: boolean): Promise<string> {
+export async function runRoughCut(path: string, cut: boolean, guidance?: string): Promise<string> {
   if (!inApp) {
     await new Promise((r) => setTimeout(r, 300));
     return "/fixtures";
   }
-  return invoke("run_rough_cut", { path, cut });
+  return invoke("run_rough_cut", { path, cut, guidance });
 }
 
 export async function loadCut(folder: string): Promise<Loaded> {
@@ -293,6 +293,68 @@ export interface Style {
   motion?: Partial<Record<TextStyle, Motion>>; // Luke's default motion for each kind of graphic
   brand?: Brand;
   graphics?: "off" | "light" | "more"; // how readily Claude suggests graphics
+  skills?: Record<string, boolean>; // which Rough cut skills Luke last ticked
+}
+
+/** One of Luke's editing skills: a step Rough cut can run. Those with `does`
+ *  the app runs itself; the rest are instructions the sidebar Claude follows. */
+export interface Skill {
+  id: string;
+  name: string;
+  text: string;
+  on: boolean; // ticked unless Luke changed it
+  does?: "cut" | "retakes" | "captions" | "graphics";
+  needs?: "screen"; // only for videos recorded in Roughcut
+  look?: "bold" | "clean"; // captions
+  builtIn: boolean;
+  edited: boolean;
+}
+
+// In the browser (npm run dev), the skills that ship, with changes kept in localStorage.
+const SHIPPED = import.meta.glob("../../skills/*.md", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+const ORDER = ["cut", "retakes", "captions", "graphics", "layouts", "zooms", "chapters", "hooks"];
+function devSkills(): Skill[] {
+  const parse = (id: string, text: string, builtIn: boolean, edited: boolean): Skill => {
+    const m = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+    const meta: Record<string, string> = {};
+    for (const line of (m?.[1] ?? "").split("\n")) {
+      const i = line.indexOf(":");
+      if (i > 0) meta[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+    }
+    return { id, name: meta.name ?? id, text: (m?.[2] ?? text).trim(), on: meta.on === "true", ...(meta.does ? { does: meta.does as Skill["does"] } : {}), ...(meta.needs ? { needs: "screen" as const } : {}), ...(meta.look ? { look: meta.look as Skill["look"] } : {}), builtIn, edited };
+  };
+  const changed: Record<string, Skill> = JSON.parse(localStorage.getItem("roughcut-skills") ?? "{}");
+  const shipped = ORDER.map((id) => changed[id] ?? parse(id, SHIPPED[`../../skills/${id}.md`] ?? "", true, false));
+  return [...shipped, ...Object.values(changed).filter((s) => !s.builtIn)];
+}
+
+export async function listSkills(): Promise<Skill[]> {
+  if (!inApp) return devSkills();
+  return invoke("list_skills");
+}
+
+/** Changes a skill (by id) or adds one (no id). */
+export async function saveSkill(patch: { id?: string; name?: string; text?: string; on?: boolean; look?: string }): Promise<Skill> {
+  if (!inApp) {
+    const all = devSkills();
+    const was = all.find((s) => s.id === patch.id);
+    const id = patch.id ?? (patch.name ?? "skill").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const next = { ...(was ?? { id, name: "", text: "", on: true, builtIn: false }), ...patch, id, edited: true } as Skill;
+    const changed = JSON.parse(localStorage.getItem("roughcut-skills") ?? "{}");
+    localStorage.setItem("roughcut-skills", JSON.stringify({ ...changed, [id]: next }));
+    return next;
+  }
+  return invoke("save_skill", patch);
+}
+
+/** Deletes one of Luke's skills, or puts one that ships back as it came. */
+export async function removeSkill(id: string): Promise<void> {
+  if (!inApp) {
+    const changed = JSON.parse(localStorage.getItem("roughcut-skills") ?? "{}");
+    delete changed[id];
+    return localStorage.setItem("roughcut-skills", JSON.stringify(changed));
+  }
+  return invoke("remove_skill", { id });
 }
 
 export interface Suggestion {
@@ -320,13 +382,13 @@ export interface Moment {
   idea: string;
   why: string;
 }
-export async function spotGraphics(folder: string): Promise<{ moments: Moment[]; prompt: string }> {
+export async function spotGraphics(folder: string, guidance?: string): Promise<{ moments: Moment[]; prompt: string }> {
   if (!inApp) {
     await new Promise((r) => setTimeout(r, 600));
     const moments = [{ from: 4, to: 8, catalog: "lt-clean-bar", idea: "Luke Lewis, creator", why: "Introduces him." }];
     return { moments, prompt: `Add these motion graphics: ${JSON.stringify(moments)}` };
   }
-  return invoke("spot_graphics", { folder });
+  return invoke("spot_graphics", { folder, guidance });
 }
 
 export async function suggestRules(folder: string): Promise<Suggestion[]> {

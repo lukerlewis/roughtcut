@@ -1,10 +1,11 @@
-import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, Clapperboard, MessageSquareX, Sparkles, Mic, Scissors, SkipBack } from "lucide-react";
+import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, Mic, Scissors, SkipBack } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
 import { Style } from "./components/Style";
 import { Record } from "./components/Record";
 import { Menu } from "./components/Menu";
+import { RoughCut } from "./components/RoughCut";
 import { Versions } from "./components/Versions";
 import { Library, type Asset, type LibraryItem } from "./components/Library";
 import { GraphicsLayer, type PlacedGraphic } from "./components/GraphicsLayer";
@@ -312,60 +313,85 @@ export default function App() {
     );
   };
 
-  // "Suggest graphics": a cheap look at the transcript first; Claude builds
-  // graphics only for the moments it picked, so a video needing none costs little.
-  const [spotting, setSpotting] = useState(false);
-  const suggestGraphics = async () => {
-    if (!project || !edits || asking || spotting) return;
+  // Rough cut: Luke ticks the skills to run. The app's own steps go first
+  // (the cut, marked takes, captions), so Claude works on the cut that's left;
+  // then everything for Claude goes in one turn. Graphics are spotted cheaply
+  // from the transcript first, so a video needing none costs little.
+  const [skills, setSkills] = useState<backend.Skill[]>([]);
+  const [choosing, setChoosing] = useState(false);
+  const openRoughCut = () => {
     player.current?.pause();
-    setTab("chat");
-    if (graphicsLevel === "off") {
-      setChat((c) => ({ ...c, messages: [...c.messages, { role: "claude", text: "Graphics suggestions are off. Turn them on under Motion graphics in Style." }] }));
-      return;
-    }
-    setSpotting(true);
-    setChat((c) => ({ ...c, messages: [...c.messages, { role: "you", text: "Suggest graphics for this video." }] }));
+    backend.listSkills().then((all) => (setSkills(all), setChoosing(true)), (e) => setNotice(String(e)));
+  };
+  const runSkills = async (chosen: backend.Skill[]) => {
+    if (!project || !edits || cutting || asking) return;
+    setChoosing(false);
+    const has = (does: string) => chosen.find((s) => s.does === does);
+    let current = edits;
+    const log = (line: string) => setCutting((c) => ({ log: [...(c?.log ?? []), line] }));
     try {
-      await backend.saveEdits(project.folder, edits);
-      const { moments, prompt } = await backend.spotGraphics(project.folder);
-      setSpotting(false);
-      if (!moments.length) {
-        setChat((c) => ({ ...c, messages: [...c.messages, { role: "claude", text: "I read through it and nothing needs a graphic." }] }));
+      const cut = has("cut");
+      if (cut) {
+        log("Asking Claude for the rough cut. This uses your Claude plan.");
+        await backend.runRoughCut(project.source, true, cut.text);
+        const loaded = await backend.loadCut(project.folder);
+        current = applyRoughCut(current, loaded.decisions);
+      }
+      let found = 0;
+      if (has("retakes")) {
+        const r = addRetakeCuts(current, words);
+        current = r.edits;
+        found = r.added;
+      }
+      const caps = has("captions");
+      if (caps) current = setCaptions(current, { on: true, style: caps.look ?? "bold" });
+      if (current !== edits) change(() => current);
+      setTab("changes");
+
+      const asks: string[] = [];
+      const graphics = has("graphics");
+      if (graphics && graphicsLevel !== "off") {
+        log("Looking for moments that want a graphic…");
+        await backend.saveEdits(project.folder, current);
+        const { moments, prompt } = await backend.spotGraphics(project.folder, graphics.text);
+        if (moments.length) asks.push(`## Add graphics\n${prompt}`);
+      }
+      for (const s of chosen.filter((s) => !s.does)) asks.push(`## ${s.name}\n${s.text}`);
+      setCutting(null);
+      if (found) setNotice(`Found ${found} marked take${found === 1 ? "" : "s"}. They're in blue for you to review.`);
+      if (!asks.length) {
+        if (graphics) setNotice("Claude read through it and nothing needs a graphic.");
         return;
       }
-      const list = moments.map((m) => `${m.idea} (${m.why.replace(/\.$/, "")})`).join("; ");
-      await ask(prompt, edits, `Make ${moments.length === 1 ? "this graphic" : `these ${moments.length} graphics`}: ${list}.`);
-    } catch (e) {
-      setChat((c) => ({ ...c, messages: [...c.messages, { role: "error", text: String(e) }] }));
-    } finally {
-      setSpotting(false);
-    }
-  };
-
-  // Claude's rough cut, when Luke asks for it. Its cuts arrive unreviewed, in blue.
-  const roughCut = async () => {
-    if (!project || cutting) return;
-    player.current?.pause();
-    setCutting({ log: ["Asking Claude for the rough cut. This uses your Claude plan."] });
-    try {
-      await backend.runRoughCut(project.source, true);
-      const loaded = await backend.loadCut(project.folder);
-      change((x) => addRetakeCuts(applyRoughCut(x, loaded.decisions), words).edits);
-      setTab("changes");
-      setCutting(null);
+      setTab("chat");
+      await ask(
+        `Do these editing steps on this video, in order. Call get_edit once first, then work through each with the roughcut tools; ` +
+          `they're Luke's skills, so follow them as written. When done, tell me in a sentence or two what you did for each.\n\n${asks.join("\n\n")}`,
+        current,
+        `Rough cut: ${chosen.map((s) => s.name.charAt(0).toLowerCase() + s.name.slice(1)).join(", ")}.`,
+      );
     } catch (e) {
       setCutting((c) => ({ log: c?.log ?? [], error: String(e) }));
     }
   };
-
-  // Takes Luke marked while filming by saying "cut that", as cuts to review.
-  const cutRetakes = () => {
-    if (!edits) return;
-    const r = addRetakeCuts(edits, words);
-    if (!r.added) return setNotice("No marked takes found. While filming, say \u201ccut that\u201d after a bad take.");
-    change(() => r.edits);
-    setTab("changes");
-    setNotice(`Found ${r.added} marked take${r.added === 1 ? "" : "s"}. They're in blue for you to review.`);
+  const tickSkill = (id: string, on: boolean) => {
+    setSkillTicks((t) => {
+      const next = { ...t, [id]: on };
+      backend.loadStyle().then((st) => backend.saveStyle({ ...st, skills: next }), () => {});
+      return next;
+    });
+  };
+  const saveSkill = async (patch: Parameters<typeof backend.saveSkill>[0]) => {
+    await backend.saveSkill(patch);
+    setSkills(await backend.listSkills());
+  };
+  const removeSkill = async (id: string) => {
+    await backend.removeSkill(id);
+    setSkills(await backend.listSkills());
+  };
+  const setGraphicsCount = (level: "light" | "more") => {
+    setGraphicsLevel(level);
+    backend.loadStyle().then((st) => backend.saveStyle({ ...st, graphics: level }), () => {});
   };
 
   // --- Playback ------------------------------------------------------------
@@ -584,6 +610,7 @@ export default function App() {
   // --- Motion graphics ------------------------------------------------------
   const [brand, setBrand] = useState<backend.Brand | undefined>(); // Luke's look, from Style
   const [graphicsLevel, setGraphicsLevel] = useState<backend.Style["graphics"]>();
+  const [skillTicks, setSkillTicks] = useState<Record<string, boolean>>({});
   // HyperFrames compositions in the project's graphics folder, shown over the
   // video in frames. Each one's page is rewritten with its settings when they
   // change, then reloaded.
@@ -709,7 +736,7 @@ export default function App() {
   // How each kind of graphic moves unless Luke changes it: his saved defaults over the built-in ones.
   const [motionDefaults, setMotionDefaults] = useState<Record<TextStyle, Motion>>(MOTION_DEFAULTS);
   useEffect(() => {
-    backend.loadStyle().then((s) => (setMotionDefaults({ ...MOTION_DEFAULTS, ...s.motion }), setBrand(s.brand), setGraphicsLevel(s.graphics)), () => {});
+    backend.loadStyle().then((s) => (setMotionDefaults({ ...MOTION_DEFAULTS, ...s.motion }), setBrand(s.brand), setGraphicsLevel(s.graphics), setSkillTicks(s.skills ?? {})), () => {});
   }, []);
   const makeMotionDefault = (style: TextStyle, motion: Motion) => {
     setMotionDefaults((m) => ({ ...m, [style]: motion }));
@@ -1100,20 +1127,9 @@ export default function App() {
         <span className="sub">{saved > 0 ? `${Math.round((saved / project.info.duration) * 100)}% shorter` : ""}</span>
         <span className="spacer" data-tauri-drag-region />
         <Updates />
-        <Menu
-          label={
-            <>
-              <Scissors size={16} /> <span className="lbl">Rough cut</span>
-            </>
-          }
-          title="Cuts for you to review"
-          items={[
-            { label: "Claude's rough cut", icon: <Scissors size={14} />, disabled: !!cutting, onClick: roughCut },
-            { label: "Takes I marked (\u201ccut that\u201d)", icon: <MessageSquareX size={14} />, onClick: cutRetakes },
-            { label: "Other openings (hooks)", icon: <Sparkles size={14} />, disabled: asking, onClick: hooks },
-            { label: spotting ? "Looking for graphics\u2026" : "Suggest graphics", icon: <Clapperboard size={14} />, disabled: asking || spotting, onClick: suggestGraphics },
-          ]}
-        />
+        <button className="btn ghost" onClick={openRoughCut} disabled={!!cutting || asking} title="Choose what Claude does to this video">
+          <Scissors size={16} /> <span className="lbl">Rough cut</span>
+        </button>
         <Menu
           label={
             <>
@@ -1442,10 +1458,25 @@ export default function App() {
 
       {recording && <Record saving={recording === "saving"} onClose={() => setRecording(null)} />}
 
+      {choosing && (
+        <RoughCut
+          skills={skills}
+          ticked={skillTicks}
+          recordedHere={!!parts?.camera?.video && !!parts.screen}
+          graphics={graphicsLevel ?? "light"}
+          onTick={tickSkill}
+          onGraphics={setGraphicsCount}
+          onSave={saveSkill}
+          onRemove={removeSkill}
+          onRun={(chosen) => void runSkills(chosen)}
+          onClose={() => setChoosing(false)}
+        />
+      )}
+
       {cutting && (
         <div className="sheet">
           <div className="card">
-            <h2>{cutting.error ? "The rough cut stopped" : "Making the rough cut…"}</h2>
+            <h2>{cutting.error ? "The rough cut stopped" : "Rough cut…"}</h2>
             {cutting.error ? <p className="error">{cutting.error}</p> : <div className="log">{cutting.log.join("\n")}</div>}
             {!cutting.error && (
               <div className="bar indeterminate">
