@@ -328,6 +328,8 @@ button.action:hover { background: var(--muted); }
 }
 /* Recording */
 .sheet .record .pick { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; font-size: 12px; color: var(--subtle-foreground); }
+.sheet .record .pick-row { display: flex; gap: 6px; align-items: center; }
+.sheet .record .pick-row .field { flex: 1; }
 .sheet .record select.field { appearance: none; }
 .sheet .record .hint { color: var(--muted-foreground); font-size: 12px; margin: 10px 0 0; line-height: 1.5; }
 .sheet .record h2 { display: flex; align-items: center; gap: 8px; }

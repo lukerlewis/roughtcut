@@ -1,4 +1,4 @@
-import { Circle, Square } from "lucide-react";
+import { Circle, RefreshCw, Square } from "lucide-react";
 import { useEffect, useState } from "react";
 import { recordingSources, startRecording, stopRecording, type Sources } from "../lib/backend";
 
@@ -25,6 +25,14 @@ export function Record({ saving, onClose }: { saving: boolean; onClose: () => vo
       })
       .catch((e) => setError(String(e)));
   }, []);
+  // Windows come and go: look again, keeping the choice if it's still open.
+  const refresh = () =>
+    recordingSources()
+      .then((s) => {
+        setSources(s);
+        if (screen && ![...s.screens, ...(s.windows ?? [])].some((x) => x.id === screen)) setScreen(s.screens[0]?.id ?? NONE);
+      })
+      .catch((e) => setError(String(e)));
   useEffect(() => {
     if (started === null) return;
     const t = setInterval(() => setNow(Date.now()), 500);
@@ -94,7 +102,34 @@ export function Record({ saving, onClose }: { saving: boolean; onClose: () => vo
         {!sources && !error && <p className="summary">Looking for your screen, camera and microphone…</p>}
         {sources && (
           <>
-            {pick("Screen", screen, setScreen, sources.screens, "Don't record the screen")}
+            <label className="pick">
+              <span>Screen</span>
+              <span className="pick-row">
+                <select className="field" value={screen} onChange={(e) => setScreen(e.target.value)}>
+                  <option value={NONE}>Don't record the screen</option>
+                  <optgroup label="Whole screen">
+                    {sources.screens.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  {!!sources.windows?.length && (
+                    <optgroup label="One window">
+                      {sources.windows.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+                <button className="btn ghost icon" title="Look for windows again" onClick={() => void refresh()}>
+                  <RefreshCw size={14} />
+                </button>
+              </span>
+            </label>
+            {screen.startsWith("w") && <p className="hint">Only this window is recorded, even when others are in front of it. Clicks are followed as it moves.</p>}
             {!sources.screenAllowed && (
               <p className="hint">
                 To record your screen, allow Roughcut in System Settings, Privacy &amp; Security, Screen &amp; System Audio Recording, then open Roughcut again.

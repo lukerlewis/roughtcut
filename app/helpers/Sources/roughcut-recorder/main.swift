@@ -3,8 +3,9 @@
 // on its own (with a menu bar item to stop it), so the editor can close.
 //
 //   roughcut-recorder list
-//       prints the screens, cameras and microphones as JSON
+//       prints the screens, windows, cameras and microphones as JSON
 //   roughcut-recorder record <folder> [--screen <id>] [--camera <id>] [--mic <id>]
+//       (a window's id is "w" and its number: it records that window alone)
 //       records until Stop in the menu bar, or SIGINT/SIGTERM; then writes
 //       <folder>/recording.json and prints `done`
 //
@@ -35,18 +36,41 @@ func microphones() -> [AVCaptureDevice] {
 
 // MARK: - list
 
+/// Apps' own windows worth recording: not Roughcut's, not the menu bar,
+/// Dock or other system furniture, and not tiny.
+func recordableWindows(_ content: SCShareableContent) -> [SCWindow] {
+    let skip: Set<String> = ["Window Server", "Dock", "Control Center", "Notification Center", "SystemUIServer", "Wallpaper", "Spotlight"]
+    return content.windows.filter { w in
+        guard let app = w.owningApplication, w.windowLayer == 0, w.isOnScreen, w.frame.width >= 200, w.frame.height >= 150 else { return false }
+        if app.processID == ProcessInfo.processInfo.processIdentifier || app.bundleIdentifier == "com.lukelewis.roughcut" { return false }
+        return !app.applicationName.isEmpty && !skip.contains(app.applicationName)
+    }
+    .sorted { ($0.owningApplication?.applicationName ?? "", $0.title ?? "") < ($1.owningApplication?.applicationName ?? "", $1.title ?? "") }
+}
+
+func windowName(_ w: SCWindow) -> String {
+    let app = w.owningApplication?.applicationName ?? "Window"
+    guard let title = w.title?.trimmingCharacters(in: .whitespaces), !title.isEmpty, title != app else { return app }
+    return "\(app): \(title.count > 50 ? String(title.prefix(49)) + "…" : title)"
+}
+
 func list() async {
     var screens: [[String: Any]] = []
+    var windows: [[String: Any]] = []
     do {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
         for (i, d) in content.displays.enumerated() {
             screens.append(["id": String(d.displayID), "name": i == 0 ? "Main screen" : "Screen \(i + 1)", "width": d.width, "height": d.height])
+        }
+        for w in recordableWindows(content) {
+            windows.append(["id": "w\(w.windowID)", "name": windowName(w), "width": Int(w.frame.width), "height": Int(w.frame.height)])
         }
     } catch {
         screens = []
     }
     let json: [String: Any] = [
         "screens": screens,
+        "windows": windows,
         "screenAllowed": !screens.isEmpty,
         "cameras": cameras().map { ["id": $0.uniqueID, "name": $0.localizedName] },
         "mics": microphones().map { ["id": $0.uniqueID, "name": $0.localizedName] },
@@ -78,7 +102,7 @@ final class Screen: NSObject, SCStreamOutput, SCStreamDelegate {
         size = CGSize(width: width, height: height)
     }
 
-    func start(display: SCDisplay, width: Int, height: Int) async throws {
+    func start(filter: SCContentFilter, width: Int, height: Int) async throws {
         let config = SCStreamConfiguration()
         config.width = width
         config.height = height
@@ -86,7 +110,7 @@ final class Screen: NSObject, SCStreamOutput, SCStreamDelegate {
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.showsCursor = true
         config.queueDepth = 6
-        let stream = SCStream(filter: SCContentFilter(display: display, excludingWindows: []), configuration: config, delegate: self)
+        let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         self.stream = stream
         try await stream.startCapture()
@@ -174,6 +198,7 @@ final class Recorder: NSObject {
     var timer: Timer?
     var stopping = false
     var frame = CGRect.zero
+    var window: CGWindowID? // when recording one window, which moves
     let began = Date()
 
     init(folder: URL) {
@@ -185,15 +210,32 @@ final class Recorder: NSObject {
         if let screenID = screenID {
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                guard let display = content.displays.first(where: { String($0.displayID) == screenID }) ?? content.displays.first else {
-                    fail("No screen to record.")
+                if screenID.hasPrefix("w") {
+                    // One window, wherever it is, even with others over it.
+                    guard let id = UInt32(screenID.dropFirst()), let w = content.windows.first(where: { $0.windowID == id }) else {
+                        fail("That window has closed. Choose it again.")
+                    }
+                    let centre = CGPoint(x: w.frame.midX, y: w.frame.midY)
+                    let display = content.displays.first { $0.frame.contains(centre) } ?? content.displays.first
+                    // Its pixels on a Retina screen: the display's pixels per point.
+                    let scale = display.map { d in CGFloat(CGDisplayCopyDisplayMode(d.displayID)?.pixelWidth ?? d.width * 2) / CGFloat(max(d.width, 1)) } ?? 2
+                    let (wd, ht) = (Int(w.frame.width * scale), Int(w.frame.height * scale))
+                    let s = try Screen(url: folder.appendingPathComponent("screen.mov"), width: wd - wd % 2, height: ht - ht % 2)
+                    try await s.start(filter: SCContentFilter(desktopIndependentWindow: w), width: wd - wd % 2, height: ht - ht % 2)
+                    screen = s
+                    frame = w.frame
+                    window = w.windowID
+                } else {
+                    guard let display = content.displays.first(where: { String($0.displayID) == screenID }) ?? content.displays.first else {
+                        fail("No screen to record.")
+                    }
+                    let mode = CGDisplayCopyDisplayMode(display.displayID)
+                    let (w, h) = (mode?.pixelWidth ?? display.width * 2, mode?.pixelHeight ?? display.height * 2)
+                    let s = try Screen(url: folder.appendingPathComponent("screen.mov"), width: w - w % 2, height: h - h % 2)
+                    try await s.start(filter: SCContentFilter(display: display, excludingWindows: []), width: w - w % 2, height: h - h % 2)
+                    screen = s
+                    frame = CGDisplayBounds(display.displayID)
                 }
-                let mode = CGDisplayCopyDisplayMode(display.displayID)
-                let (w, h) = (mode?.pixelWidth ?? display.width * 2, mode?.pixelHeight ?? display.height * 2)
-                let s = try Screen(url: folder.appendingPathComponent("screen.mov"), width: w - w % 2, height: h - h % 2)
-                try await s.start(display: display, width: w - w % 2, height: h - h % 2)
-                screen = s
-                frame = CGDisplayBounds(display.displayID)
             } catch {
                 fail("Roughcut isn't allowed to record the screen. Turn it on in System Settings, Privacy & Security, Screen Recording. (\(error.localizedDescription))")
             }
@@ -221,6 +263,13 @@ final class Recorder: NSObject {
 
     func click() {
         guard let started = screen?.started, frame.width > 0 else { return }
+        // A recorded window may have moved since: clicks are kept relative to it.
+        if let id = window,
+           let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]])?.first,
+           let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+           let rect = CGRect(dictionaryRepresentation: bounds) {
+            frame = rect
+        }
         // NSEvent's origin is bottom-left of the main screen; CGDisplayBounds' is top-left.
         let p = NSEvent.mouseLocation
         let mainHeight = NSScreen.screens.first?.frame.height ?? frame.height

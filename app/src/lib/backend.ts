@@ -425,6 +425,7 @@ export interface Source {
 
 export interface Sources {
   screens: Source[];
+  windows?: Source[]; // single app windows ("w" + its number), open now
   screenAllowed: boolean;
   cameras: Source[];
   mics: Source[];
@@ -434,6 +435,7 @@ export async function recordingSources(): Promise<Sources> {
   if (!inApp)
     return {
       screens: [{ id: "1", name: "Main screen" }],
+      windows: [{ id: "w42", name: "Safari: Roughcut planning" }, { id: "w43", name: "Xcode: main.swift" }],
       screenAllowed: true,
       cameras: [{ id: "cam", name: "FaceTime HD Camera" }],
       mics: [{ id: "mic", name: "MacBook Air Microphone" }],
