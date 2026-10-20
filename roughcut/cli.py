@@ -72,6 +72,13 @@ def cut(args: argparse.Namespace) -> int:
         wav.unlink(missing_ok=True)
     transcribe.save(words, out / "words.json")
 
+    if args.transcribe_only:
+        # The editor opens the recording as it is; Luke asks for a rough cut later.
+        (out / "decisions.json").write_text(json.dumps({"by": "none", "summary": "", "cuts": [], "fps": str(src.fps)}, indent=1))
+        log(f"Done in {time.time() - t0:.0f}s: transcript only, nothing cut")
+        print(out)
+        return 0
+
     units = analyze.analyze(words)
     (out / "units.json").write_text(json.dumps([asdict(u) for u in units], indent=1))
     flagged = sum(1 for u in units if u.flags)
@@ -138,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("cut", help="make a rough cut of a recording")
     c.add_argument("recording")
     c.add_argument("--out", help='output folder (default: "<name> rough cut" next to the recording)')
+    c.add_argument("--transcribe-only", action="store_true", help="only write the words (words.json) and an empty decisions.json")
     c.add_argument("--rules-only", action="store_true", help="skip Claude; cut fillers and earlier takes by rule")
     c.add_argument("--model", default="opus", help="Claude model alias for the CLI (default: opus)")
     c.add_argument("--style", help="style guide markdown (default: the built-in talking-head guide)")

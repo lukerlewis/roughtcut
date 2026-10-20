@@ -62,6 +62,20 @@ export interface Trim {
   keep: boolean;
 }
 
+/** A video Claude made (with FFmpeg or Python) that plays instead of the
+ *  recording over source seconds start..end, from `offset` seconds into its
+ *  file. `file` is relative to the project folder, e.g. clips/paris.mp4. */
+export interface Clip {
+  file: string;
+  start: number;
+  end: number;
+  offset: number;
+  length: number; // the file's duration
+  by: "you" | "agent";
+  status?: AgentStatus; // Claude's clips: unreviewed until Luke keeps or removes ("restored") them
+  reason?: string;
+}
+
 export interface Edits {
   version: 1;
   agent: AgentCut[];
@@ -70,6 +84,9 @@ export interface Edits {
   trims?: Trim[];
   zooms?: Zoom[];
   captions?: Captions;
+  clips?: Clip[];
+  /** Play every pause, start to end, as recorded. True until a rough cut tightens them. */
+  keepPauses?: boolean;
 }
 
 export interface Decisions {
@@ -94,7 +111,19 @@ export function fromDecisions(d: Decisions): Edits {
     agent: d.cuts.map((c) => ({ first: c.from, last: c.to, reason: c.reason, status: "pending" as const })),
     user: [],
     log: [],
+    ...(d.by === "none" ? { keepPauses: true } : {}),
   };
+}
+
+/** Luke asks for a rough cut: Claude's new cuts replace its unreviewed ones,
+ *  skipping words he already kept or restored, and pauses get tightened. */
+export function applyRoughCut(e: Edits, d: Decisions): Edits {
+  const reviewed = e.agent.filter((c) => c.status !== "pending");
+  const fresh = d.cuts
+    .filter((c) => !reviewed.some((r) => r.first <= c.to && r.last >= c.from))
+    .map((c) => ({ first: c.from, last: c.to, reason: c.reason, status: "pending" as const }));
+  const agent = [...reviewed, ...fresh].sort((a, b) => a.first - b.first);
+  return { ...e, agent, keepPauses: false, log: [...e.log, { at: now(), by: "agent", op: "rough-cut", note: d.summary }] };
 }
 
 export type CutKind = "agent-pending" | "agent-accepted" | "user" | null;
@@ -162,7 +191,14 @@ export function applyTrims(ranges: [number, number][], trims: Trim[], duration: 
 
 /** What plays: the kept words' ranges with Luke's trims applied. */
 export function editRanges(words: Word[], e: Edits, duration: number): [number, number][] {
-  return applyTrims(keptRanges(words, keptSet(words.length, e), duration), e.trims ?? [], duration);
+  const keep = keptSet(words.length, e);
+  let ranges = keptRanges(words, keep, duration, e.keepPauses ? { ...PARAMS, maxPause: Infinity } : PARAMS);
+  if (e.keepPauses && ranges.length) {
+    // Nothing tightened yet: the silence before the first word and after the last one plays too.
+    if (keep.has(0)) ranges[0][0] = 0;
+    if (keep.has(words.length - 1)) ranges[ranges.length - 1][1] = duration;
+  }
+  return applyTrims(ranges, e.trims ?? [], duration);
 }
 
 /** Who cut each word, as the transcript shows it: a word a trim took out reads
@@ -199,6 +235,15 @@ export function deleteClip(e: Edits, ranges: [number, number][], index: number):
     ...e,
     trims: [...(e.trims ?? []), { start: a, end: b, keep: false }],
     log: [...e.log, { at: now(), by: "you", op: "delete-clip", note: `${a.toFixed(2)}-${b.toFixed(2)}` }],
+  };
+}
+
+/** Luke deletes a pause (or any span) on the timeline: source seconds start..end. */
+export function cutSpan(e: Edits, start: number, end: number): Edits {
+  return {
+    ...e,
+    trims: [...(e.trims ?? []), { start, end, keep: false }],
+    log: [...e.log, { at: now(), by: "you", op: "cut-pause", note: `${start.toFixed(2)}-${end.toFixed(2)}` }],
   };
 }
 
@@ -297,12 +342,14 @@ export function acceptAll(e: Edits): Edits {
     ...e,
     agent: e.agent.map((c) => (c.status === "pending" ? { ...c, status: "accepted" as const } : c)),
     zooms: e.zooms?.map((z) => (z.status === "pending" ? { ...z, status: "accepted" as const } : z)),
+    clips: e.clips?.map((c) => (c.status === "pending" ? { ...c, status: "accepted" as const } : c)),
     log: [...e.log, { at: now(), by: "you", op: "accept-all" }],
   };
 }
 
 export function pendingCount(e: Edits): number {
-  return e.agent.filter((c) => c.status === "pending").length + (e.zooms ?? []).filter((z) => z.status === "pending").length;
+  const pending = (x: { status?: AgentStatus }) => x.status === "pending";
+  return e.agent.filter(pending).length + (e.zooms ?? []).filter(pending).length + (e.clips ?? []).filter(pending).length;
 }
 
 /** The agent cut containing word i that isn't restored, if any. */
@@ -391,30 +438,39 @@ export function setZoomTimes(e: Edits, words: Word[], index: number, start: numb
 }
 
 export interface Segment {
-  start: number; // source seconds
+  start: number; // seconds into the recording, or into `file` when set
   end: number;
   zoom: { scale: number; x: number; y: number } | null;
+  file?: string; // one of Claude's clips playing instead of the recording
 }
 
-/** The kept ranges split wherever a zoom starts or ends, for export. */
-export function segments(ranges: [number, number][], words: Word[], zooms: Zoom[]): Segment[] {
+/** The kept ranges split wherever a zoom or clip starts or ends, for export.
+ *  Pieces under a clip play from the clip's file. */
+export function segments(ranges: [number, number][], words: Word[], zooms: Zoom[], clips: Clip[] = [], folder = ""): Segment[] {
   const spans = zooms.map((z) => ({ span: zoomSpan(words, z), zoom: { scale: z.scale, x: z.x, y: z.y } }));
-  const out: Segment[] = [];
+  const pieces: (Segment & { clip: number })[] = [];
   for (const [a, b] of ranges) {
     const cuts = new Set([a, b]);
     for (const { span } of spans) for (const t of span) if (t > a && t < b) cuts.add(t);
+    for (const c of clips) for (const t of [c.start, c.end]) if (t > a && t < b) cuts.add(t);
     const points = [...cuts].sort((x, y) => x - y);
     for (let i = 0; i + 1 < points.length; i++) {
       const [s, t] = [points[i], points[i + 1]];
       const mid = (s + t) / 2;
       const z = spans.find(({ span }) => span[0] <= mid && mid <= span[1]);
-      const last = out[out.length - 1];
+      const clip = clips.findIndex((c) => c.start <= mid && mid <= c.end);
+      const last = pieces[pieces.length - 1];
       // Merge with the previous piece if nothing changes between them.
-      if (last && last.end === s && JSON.stringify(last.zoom) === JSON.stringify(z?.zoom ?? null)) last.end = t;
-      else out.push({ start: s, end: t, zoom: z?.zoom ?? null });
+      if (last && last.end === s && last.clip === clip && JSON.stringify(last.zoom) === JSON.stringify(z?.zoom ?? null)) last.end = t;
+      else pieces.push({ start: s, end: t, zoom: z?.zoom ?? null, clip });
     }
   }
-  return out;
+  return pieces.map(({ clip, ...p }) => {
+    if (clip < 0) return p;
+    const c = clips[clip];
+    const at = (t: number) => Math.min(c.length, c.offset + (t - c.start));
+    return { ...p, start: at(p.start), end: at(p.end), file: `${folder}/${c.file}` };
+  });
 }
 
 /** The zoom showing at source time t, if any. */
@@ -477,4 +533,127 @@ export function cueAt(cues: Cue[], t: number): Cue | null {
 
 export function setCaptions(e: Edits, captions: Captions): Edits {
   return { ...e, captions, log: [...e.log, { at: now(), by: "you", op: captions.on ? `captions-${captions.style}` : "captions-off" }] };
+}
+
+// --- Claude's clips --------------------------------------------------------
+
+/** Clips that are on screen: everything except Claude's that Luke removed. */
+export function liveClips(e: Edits): Clip[] {
+  return (e.clips ?? []).filter((c) => c.status !== "restored");
+}
+
+/** The clip playing at source time t, if any. */
+export function clipAt(clips: Clip[], t: number): Clip | null {
+  return clips.find((c) => c.start <= t && t < c.end) ?? null;
+}
+
+export function setClipStatus(e: Edits, index: number, status: AgentStatus): Edits {
+  const c = e.clips?.[index];
+  if (!c || c.status === status) return e;
+  const clips = e.clips!.map((x, i) => (i === index ? { ...x, status } : x));
+  const op = status === "accepted" ? "accept-clip" : status === "restored" ? "remove-clip" : "unreview-clip";
+  return { ...e, clips, log: [...e.log, { at: now(), by: "you", op, note: c.file }] };
+}
+
+/** Luke drags a clip on the timeline: it now covers source start..end and
+ *  plays from `offset` into its file. Moving it keeps the offset; trimming its
+ *  left edge moves the offset with it. A clip of Claude's he adjusts counts as kept. */
+export function setClipTimes(e: Edits, index: number, start: number, end: number, offset: number): Edits {
+  const c = e.clips?.[index];
+  if (!c || end - start < 0.05 || offset < -1e-6 || offset + (end - start) > c.length + 1e-3) return e;
+  if (Math.abs(c.start - start) < 1e-4 && Math.abs(c.end - end) < 1e-4 && Math.abs(c.offset - offset) < 1e-4) return e;
+  const status = c.by === "agent" ? ("accepted" as const) : c.status;
+  const clips = e.clips!.map((x, i) => (i === index ? { ...x, start, end, offset: Math.max(0, offset), status } : x));
+  return { ...e, clips, log: [...e.log, { at: now(), by: "you", op: "move-clip", note: `${c.file} ${start.toFixed(2)}-${end.toFixed(2)}` }] };
+}
+
+/** Luke deletes a clip: Claude's are kept as removed so it won't add them back. */
+export function removeClip(e: Edits, index: number): Edits {
+  const c = e.clips?.[index];
+  if (!c) return e;
+  const clips = c.by === "agent" ? e.clips!.map((x, i) => (i === index ? { ...x, status: "restored" as const } : x)) : e.clips!.filter((_, i) => i !== index);
+  return { ...e, clips, log: [...e.log, { at: now(), by: "you", op: "remove-clip", note: c.file }] };
+}
+
+// --- Word blocks on the timeline -------------------------------------------
+
+/** A piece of a kept range: one word, or a pause long enough to be worth its own block. */
+export type Block = { word: number; start: number; end: number } | { word: null; start: number; end: number };
+
+export const PAUSE_BLOCK = 0.3; // seconds of quiet that get their own block
+
+/** Each kept range split into one block per word, with longer pauses as
+ *  blocks of their own. Blocks tile the range exactly (source seconds). */
+export function blocks(ranges: [number, number][], words: Word[]): Block[][] {
+  return ranges.map(([a, b]) => {
+    const inside = words.flatMap((w, i) => {
+      const mid = (w.start + w.end) / 2;
+      return mid >= a && mid <= b ? [i] : [];
+    });
+    if (!inside.length) return [{ word: null, start: a, end: b }];
+    const out: Block[] = [];
+    let at = a;
+    const pause = (to: number) => {
+      if (to - at >= PAUSE_BLOCK) {
+        out.push({ word: null, start: at, end: to - 0.04 });
+        at = to - 0.04;
+      }
+    };
+    inside.forEach((i, k) => {
+      const w = words[i];
+      const next = inside[k + 1];
+      pause(Math.max(at, w.start));
+      let end: number;
+      if (next === undefined) end = b - w.end >= PAUSE_BLOCK ? Math.min(b, w.end + 0.04) : b;
+      else {
+        const gap = words[next].start - w.end;
+        end = gap >= PAUSE_BLOCK ? w.end + 0.04 : w.end + Math.max(0, gap) / 2;
+      }
+      end = Math.min(b, Math.max(end, at + 0.01));
+      out.push({ word: i, start: at, end });
+      at = end;
+    });
+    if (b - at > 1e-6) out.push({ word: null, start: at, end: b });
+    return out;
+  });
+}
+
+// --- Effect settings -------------------------------------------------------
+
+/** Luke changes a zoom's amount or where it points (x, y: 0..1 of the frame).
+ *  A zoom of Claude's he adjusts counts as kept. */
+export function setZoomLook(e: Edits, index: number, look: { scale?: number; x?: number; y?: number }): Edits {
+  const z = e.zooms?.[index];
+  if (!z) return e;
+  const next = {
+    ...z,
+    scale: Math.min(3, Math.max(1.05, look.scale ?? z.scale)),
+    x: Math.min(1, Math.max(0, look.x ?? z.x)),
+    y: Math.min(1, Math.max(0, look.y ?? z.y)),
+    status: z.by === "agent" ? ("accepted" as const) : z.status,
+  };
+  if (next.scale === z.scale && next.x === z.x && next.y === z.y) return e;
+  const zooms = e.zooms!.map((x, i) => (i === index ? next : x));
+  return { ...e, zooms, log: [...e.log, { at: now(), by: "you", op: "zoom-look", first: z.first, last: z.last, note: `${Math.round(next.scale * 100)}% at ${next.x.toFixed(2)},${next.y.toFixed(2)}` }] };
+}
+
+/** Luke deletes one zoom. Claude's is kept as removed so it won't add it back. */
+export function removeZoom(e: Edits, index: number): Edits {
+  const z = e.zooms?.[index];
+  if (!z) return e;
+  const zooms = z.by === "agent" ? e.zooms!.map((x, i) => (i === index ? { ...x, status: "restored" as const } : x)) : e.zooms!.filter((_, i) => i !== index);
+  return { ...e, zooms, log: [...e.log, { at: now(), by: "you", op: "unzoom", first: z.first, last: z.last }] };
+}
+
+/** The part of the frame a zoom shows, as fractions: scale s about the point
+ *  (x, y) shows a box 1/s wide whose left edge is x(1 - 1/s). */
+export function zoomBox(z: { scale: number; x: number; y: number }) {
+  const size = 1 / z.scale;
+  return { left: z.x * (1 - size), top: z.y * (1 - size), size };
+}
+
+/** The point to zoom about so the box's top-left corner lands at (left, top). */
+export function zoomPointFor(scale: number, left: number, top: number) {
+  const room = 1 - 1 / scale;
+  return { x: room > 0 ? Math.min(1, Math.max(0, left / room)) : 0.5, y: room > 0 ? Math.min(1, Math.max(0, top / room)) : 0.5 };
 }

@@ -1,4 +1,4 @@
-import { ArrowUp, BookOpen, Captions, RotateCcw, Scissors, Square, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowUp, BookOpen, Captions, Film, RotateCcw, Scissors, Square, Terminal, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../lib/backend";
 import { timecode, type Word } from "../lib/edl";
@@ -25,6 +25,31 @@ function Action({ m, words, onSeekWord }: { m: ChatMessage; words: Word[]; onSee
         <BookOpen size={13} /> Read the edit
       </div>
     );
+  if (m.tool === "add_clip")
+    return (
+      <div className="action">
+        <Film size={13} />
+        <span className="what">
+          Made a new clip <span className="why">· {m.input?.reason ?? ""}</span>
+        </span>
+        <span className="mono">{timecode(Number(m.input?.start) || 0)}</span>
+      </div>
+    );
+  if (m.tool === "remove_clip")
+    return (
+      <div className="action quiet">
+        <Film size={13} /> Took out its clip at {timecode(Number(m.input?.start) || 0)}
+      </div>
+    );
+  if (m.tool === "Bash" || m.tool === "Write" || m.tool === "Read") {
+    const cmd = String(m.input?.command ?? m.input?.file_path ?? "").trim();
+    const what = m.tool === "Bash" ? `Ran ${cmd.split(/\s+/)[0] || "a command"}` : m.tool === "Write" ? "Wrote a file" : "Read a file";
+    return (
+      <div className="action quiet" title={cmd}>
+        <Terminal size={13} /> {what}
+      </div>
+    );
+  }
   if (m.tool === "set_captions")
     return (
       <div className="action quiet">
@@ -38,7 +63,9 @@ function Action({ m, words, onSeekWord }: { m: ChatMessage; words: Word[]; onSee
         ? [ZoomIn, "Zoom in on"]
         : m.tool === "remove_zoom"
           ? [ZoomOut, "Unzoom"]
-          : [RotateCcw, "Put back"];
+          : m.tool === "restore_words"
+            ? [RotateCcw, "Put back"]
+            : [BookOpen, m.tool ?? "Used a tool"];
   return (
     <button className="action" onClick={() => words[from] && onSeekWord(from)} title="Show this in the video">
       <Icon size={13} />

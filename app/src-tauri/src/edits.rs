@@ -48,6 +48,24 @@ pub struct Zoom {
     pub end: Option<f64>,
 }
 
+/// A clip Claude made with FFmpeg or Python. It plays instead of the
+/// recording from `start` to `end` (source seconds), from `offset` seconds
+/// into its file, which is `length` long and sits in the cut folder.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub struct Clip {
+    pub file: String,
+    pub start: f64,
+    pub end: f64,
+    #[serde(default)]
+    pub offset: f64,
+    pub length: f64,
+    pub by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>, // pending | accepted | restored (removed)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub struct Captions {
     pub on: bool,
@@ -64,6 +82,8 @@ pub struct Edits {
     pub zooms: Vec<Zoom>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub captions: Option<Captions>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clips: Vec<Clip>,
     /// Anything a newer app version added, kept as is.
     #[serde(flatten)]
     pub other: serde_json::Map<String, Value>,
@@ -104,7 +124,7 @@ pub fn load(folder: &Path) -> Result<Edits, String> {
             status: "pending".into(),
         })
         .collect();
-    Ok(Edits { version: 1, agent, user: vec![], log: vec![], zooms: vec![], captions: None, other: Default::default() })
+    Ok(Edits { version: 1, agent, user: vec![], log: vec![], zooms: vec![], captions: None, clips: vec![], other: Default::default() })
 }
 
 pub fn save(folder: &Path, e: &Edits) -> Result<(), String> {
@@ -170,6 +190,27 @@ pub fn restore(e: &mut Edits, first: usize, last: usize) {
     log(e, "restore", first, last, None);
 }
 
+/// Claude adds a clip it made. Live clips it overlaps are taken off (a new
+/// version replaces the old one).
+pub fn add_clip(e: &mut Edits, file: &str, start: f64, end: f64, length: f64, reason: &str) {
+    for c in e.clips.iter_mut() {
+        if c.status.as_deref() != Some("restored") && c.start < end && c.end > start {
+            c.status = Some("restored".into());
+        }
+    }
+    e.clips.push(Clip {
+        file: file.into(),
+        start,
+        end,
+        offset: 0.0,
+        length,
+        by: "agent".into(),
+        status: Some("pending".into()),
+        reason: Some(reason.into()),
+    });
+    e.log.push(serde_json::json!({ "at": now(), "by": "agent", "op": "clip", "note": format!("{file} {start:.2}-{end:.2}: {reason}") }));
+}
+
 /// Claude zooms in on first..last. Overlapping zooms that aren't Luke's are replaced.
 pub fn zoom(e: &mut Edits, first: usize, last: usize, scale: f64, reason: &str) -> Result<(), String> {
     if e.zooms.iter().any(|z| z.by == "you" && z.first <= last && z.last >= first) {
@@ -179,7 +220,7 @@ pub fn zoom(e: &mut Edits, first: usize, last: usize, scale: f64, reason: &str) 
     e.zooms.push(Zoom {
         first,
         last,
-        scale: scale.clamp(1.05, 2.0),
+        scale: scale.clamp(1.05, 2.5),
         x: 0.5,
         y: 0.4,
         by: "agent".into(),
@@ -237,8 +278,28 @@ pub fn kinds(n: usize, e: &Edits) -> Vec<Kind> {
     k
 }
 
-/// Length of the cut in seconds. Mirrors keptRanges in edl.ts.
+/// Length of the cut in seconds.
 pub fn kept_length(words: &[Word], kinds: &[Kind], duration: f64) -> f64 {
+    kept_ranges(words, kinds, duration).iter().map(|(a, b)| b - a).sum()
+}
+
+/// Where source second t plays in the cut. A removed moment maps to the next kept one.
+pub fn cut_time(ranges: &[(f64, f64)], t: f64) -> f64 {
+    let mut acc = 0.0;
+    for (a, b) in ranges {
+        if t < *a {
+            return acc;
+        }
+        if t <= *b {
+            return acc + (t - a);
+        }
+        acc += b - a;
+    }
+    acc
+}
+
+/// The source ranges that play. Mirrors keptRanges in edl.ts (without Luke's timeline trims).
+pub fn kept_ranges(words: &[Word], kinds: &[Kind], duration: f64) -> Vec<(f64, f64)> {
     let (pad_in, pad_out, max_pause, min_clip) = (0.08, 0.15, 0.35, 0.25);
     let keep = |i: usize| kinds[i] == Kind::Kept;
     let mut ranges: Vec<(f64, f64)> = vec![];
@@ -258,7 +319,7 @@ pub fn kept_length(words: &[Word], kinds: &[Kind], duration: f64) -> f64 {
         }
         prev = Some(i);
     }
-    ranges.iter().map(|(a, b)| b - a).filter(|d| *d >= min_clip).sum()
+    ranges.into_iter().filter(|(a, b)| b - a >= min_clip).collect()
 }
 
 #[cfg(test)]
@@ -293,7 +354,7 @@ mod tests {
     }
 
     fn empty() -> Edits {
-        Edits { version: 1, agent: vec![], user: vec![], log: vec![], zooms: vec![], captions: None, other: Default::default() }
+        Edits { version: 1, agent: vec![], user: vec![], log: vec![], zooms: vec![], captions: None, clips: vec![], other: Default::default() }
     }
 
     #[test]
@@ -302,7 +363,7 @@ mod tests {
         zoom(&mut e, 3, 5, 1.3, "punchline").unwrap();
         zoom(&mut e, 4, 6, 9.0, "again").unwrap();
         assert_eq!(e.zooms.len(), 1);
-        assert_eq!(e.zooms[0].scale, 2.0);
+        assert_eq!(e.zooms[0].scale, 2.5);
         assert_eq!(unzoom(&mut e, 6, 6), 1);
         assert_eq!(e.zooms[0].status.as_deref(), Some("restored"));
         set_captions(&mut e, true, "clean");

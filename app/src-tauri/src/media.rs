@@ -15,6 +15,7 @@ pub struct Info {
     pub width: u32,
     pub height: u32,
     pub fps: f64,
+    pub audio: bool,
 }
 
 fn rate(s: &str) -> f64 {
@@ -50,6 +51,7 @@ pub fn probe(path: &Path) -> Result<Info, String> {
         width: video["width"].as_u64().unwrap_or(0) as u32,
         height: video["height"].as_u64().unwrap_or(0) as u32,
         fps,
+        audio: v["streams"].as_array().is_some_and(|s| s.iter().any(|s| s["codec_type"] == "audio")),
     })
 }
 
@@ -94,12 +96,29 @@ pub struct Zoom {
     pub y: f64,
 }
 
-/// A kept piece of the recording, in source seconds, maybe zoomed in.
+/// A kept piece of the recording, in source seconds, maybe zoomed in. With
+/// `file`, the piece comes from one of Claude's clips instead, and start..end
+/// are seconds into that file.
 #[derive(Deserialize)]
 pub struct Segment {
     pub start: f64,
     pub end: f64,
     pub zoom: Option<Zoom>,
+    #[serde(default)]
+    pub file: Option<String>,
+}
+
+/// The files the export reads: the recording first, then each clip once.
+pub fn inputs(source: &Path, segments: &[Segment]) -> Vec<std::path::PathBuf> {
+    let mut files = vec![source.to_path_buf()];
+    for s in segments {
+        if let Some(f) = &s.file {
+            if !files.iter().any(|x| x == Path::new(f)) {
+                files.push(f.into());
+            }
+        }
+    }
+    files
 }
 
 /// One caption image and when it shows, in cut seconds. The editor draws
@@ -123,10 +142,18 @@ pub struct Captions {
 
 /// The filter graph that trims each piece, zooms it if asked, joins them and
 /// lays the caption strips (input 1) over the result if there are any.
-pub fn concat_graph(segments: &[Segment], width: u32, height: u32, captions_top: Option<f64>) -> String {
+pub fn concat_graph(segments: &[Segment], inputs: &[std::path::PathBuf], width: u32, height: u32, captions_top: Option<f64>) -> String {
     let mut g = String::new();
     for (i, s) in segments.iter().enumerate() {
         let (a, b) = (s.start, s.end);
+        // Claude's clips come in at whatever size they were made; match the recording.
+        let (k, fit) = match &s.file {
+            Some(f) => (
+                inputs.iter().position(|x| x == Path::new(f)).unwrap_or(0),
+                format!(",scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"),
+            ),
+            None => (0, String::new()),
+        };
         let zoom = match s.zoom {
             // Crop the part of the frame the zoom shows, then scale it back to full size.
             Some(z) if z.scale > 1.001 => format!(
@@ -137,16 +164,17 @@ pub fn concat_graph(segments: &[Segment], width: u32, height: u32, captions_top:
             ),
             _ => String::new(),
         };
-        g += &format!("[0:v]trim={a:.4}:{b:.4},setpts=PTS-STARTPTS{zoom},setsar=1[v{i}];");
-        g += &format!("[0:a]atrim={a:.4}:{b:.4},asetpts=PTS-STARTPTS[a{i}];");
+        g += &format!("[{k}:v]trim={a:.4}:{b:.4},setpts=PTS-STARTPTS{fit}{zoom},setsar=1[v{i}];");
+        g += &format!("[{k}:a]atrim={a:.4}:{b:.4},asetpts=PTS-STARTPTS,aresample=48000[a{i}];");
     }
     for i in 0..segments.len() {
         g += &format!("[v{i}][a{i}]");
     }
     let n = segments.len();
+    let c = inputs.len(); // the caption strips come in after the recording and clips
     match captions_top {
         Some(top) => g + &format!(
-            "concat=n={n}:v=1:a=1[vc][a];[1:v]format=rgba[cap];[vc][cap]overlay=x=0:y=main_h*{top:.4}:eof_action=pass:format=auto[v]"
+            "concat=n={n}:v=1:a=1[vc][a];[{c}:v]format=rgba[cap];[vc][cap]overlay=x=0:y=main_h*{top:.4}:eof_action=pass:format=auto[v]"
         ),
         None => g + &format!("concat=n={n}:v=1:a=1[v][a]"),
     }
@@ -214,7 +242,8 @@ pub fn export(source: &Path, segments: &[Segment], captions: Option<&Captions>, 
         Some(c) if !c.frames.is_empty() => Some(write_captions(c, total).map_err(|e| format!("Couldn't write the captions: {e}"))?),
         _ => None,
     };
-    let graph = concat_graph(segments, info.width, info.height, captions.filter(|_| caps.is_some()).map(|c| c.top));
+    let files = inputs(source, segments);
+    let graph = concat_graph(segments, &files, info.width, info.height, captions.filter(|_| caps.is_some()).map(|c| c.top));
     let mut encoders: Vec<Vec<&str>> = Vec::new();
     if cfg!(target_os = "macos") {
         encoders.push(vec!["-c:v", "h264_videotoolbox", "-b:v", &bitrate]);
@@ -222,7 +251,7 @@ pub fn export(source: &Path, segments: &[Segment], captions: Option<&Captions>, 
     encoders.push(vec!["-c:v", "libx264", "-preset", "medium", "-crf", "18"]);
     let mut result = Err(String::new());
     for video in &encoders {
-        result = encode(source, caps.as_ref().map(|d| d.join("list.ffconcat")).as_deref(), &graph, total, dest, video, &progress);
+        result = encode(&files, caps.as_ref().map(|d| d.join("list.ffconcat")).as_deref(), &graph, total, dest, video, &progress);
         if result.is_ok() {
             break;
         }
@@ -256,9 +285,12 @@ fn write_captions(c: &Captions, total: f64) -> std::io::Result<std::path::PathBu
     Ok(dir)
 }
 
-fn encode(source: &Path, captions: Option<&Path>, graph: &str, total: f64, dest: &Path, video: &[&str], progress: &impl Fn(f64)) -> Result<(), String> {
+fn encode(files: &[std::path::PathBuf], captions: Option<&Path>, graph: &str, total: f64, dest: &Path, video: &[&str], progress: &impl Fn(f64)) -> Result<(), String> {
     let mut cmd = tools::command(tools::ffmpeg());
-    cmd.args(["-v", "error", "-y", "-i"]).arg(source);
+    cmd.args(["-v", "error", "-y"]);
+    for f in files {
+        cmd.arg("-i").arg(f);
+    }
     if let Some(list) = captions {
         cmd.args(["-f", "concat", "-safe", "0", "-i"]).arg(list);
     }
@@ -297,15 +329,16 @@ mod tests {
     #[test]
     fn graph_joins_every_range() {
         let segs = [
-            Segment { start: 1.0, end: 2.5, zoom: None },
-            Segment { start: 4.0, end: 6.0, zoom: Some(Zoom { scale: 1.5, x: 0.5, y: 0.4 }) },
+            Segment { start: 1.0, end: 2.5, zoom: None, file: None },
+            Segment { start: 4.0, end: 6.0, zoom: Some(Zoom { scale: 1.5, x: 0.5, y: 0.4 }), file: None },
         ];
-        let g = concat_graph(&segs, 1920, 1080, None);
+        let files = inputs(Path::new("/r.mov"), &segs);
+        let g = concat_graph(&segs, &files, 1920, 1080, None);
         assert!(g.contains("[0:v]trim=1.0000:2.5000,setpts=PTS-STARTPTS,setsar=1[v0]"));
         assert!(g.contains("crop=w=iw/1.5:h=ih/1.5:x=(iw-iw/1.5)*0.5:y=(ih-ih/1.5)*0.4,scale=1920:1080"));
         assert!(g.contains("[0:a]atrim=4.0000:6.0000"));
         assert!(g.ends_with("[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"));
-        let g = concat_graph(&segs, 1920, 1080, Some(0.6));
+        let g = concat_graph(&segs, &files, 1920, 1080, Some(0.6));
         assert!(g.ends_with("concat=n=2:v=1:a=1[vc][a];[1:v]format=rgba[cap];[vc][cap]overlay=x=0:y=main_h*0.6000:eof_action=pass:format=auto[v]"));
     }
 
@@ -337,11 +370,19 @@ mod tests {
             eprintln!("skipping: no ffmpeg");
             return;
         }
+        let clip = tools::command(tools::ffmpeg())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=red:size=160x90:rate=25", "-f", "lavfi", "-i", "sine=f=500"])
+            .args(["-t", "2", "-c:v", "libx264", "-c:a", "aac", "-shortest"])
+            .arg(dir.join("clip.mp4"))
+            .status();
+        assert!(clip.is_ok_and(|s| s.success()));
         let dest = dir.join("out.mp4");
         let seen = std::cell::Cell::new(0.0);
         let segs = [
-            Segment { start: 0.5, end: 2.0, zoom: None },
-            Segment { start: 3.0, end: 4.5, zoom: Some(Zoom { scale: 1.4, x: 0.5, y: 0.4 }) },
+            Segment { start: 0.5, end: 2.0, zoom: None, file: None },
+            Segment { start: 3.0, end: 4.5, zoom: Some(Zoom { scale: 1.4, x: 0.5, y: 0.4 }), file: None },
+            // A clip of Claude's, made at another size.
+            Segment { start: 0.2, end: 1.2, zoom: None, file: Some(dir.join("clip.mp4").to_string_lossy().into()) },
         ];
         // A one-pixel PNG stands in for the editor's caption strips.
         let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
@@ -352,7 +393,7 @@ mod tests {
         };
         export(&src, &segs, Some(&captions), &dest, |p| seen.set(p)).unwrap();
         let got = probe(&dest).unwrap();
-        assert!((got.duration - 3.0).abs() < 0.15, "{}", got.duration);
+        assert!((got.duration - 4.0).abs() < 0.15, "{}", got.duration);
         assert_eq!((got.width, got.height), (320, 240));
         assert_eq!(seen.get(), 1.0);
         fs::remove_dir_all(&dir).ok();

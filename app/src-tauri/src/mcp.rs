@@ -73,11 +73,13 @@ fn tools() -> Value {
         },
         {
             "name": "zoom_in",
-            "description": "Punch in on words from..to: the frame scales up, centred a little above the middle (on Luke's face), for exactly while those words play. Good for emphasis on a key line or to hide a jump cut. Shows to Luke as your unreviewed zoom until he keeps or removes it; he can drag it on the timeline.",
+            "description": "Punch in on words from..to: the frame scales up about a point (by default a little above the middle, on Luke's face) for exactly while those words play. Good for emphasis on a key line or to hide a jump cut. Shows to Luke as your unreviewed zoom until he keeps or removes it; he can drag it on the timeline.",
             "inputSchema": {
                 "type": "object",
                 "properties": range(json!({
-                    "scale": { "type": "number", "description": "How far in: 1.15 subtle, 1.3 normal (default), 1.6 strong. 1.05 to 2." },
+                    "scale": { "type": "number", "description": "How far in: 1.15 subtle, 1.3 normal (default), 1.6 strong. 1.05 to 2.5." },
+                    "x": { "type": "number", "description": "Where to zoom, across: 0 left edge, 0.5 middle (default), 1 right edge." },
+                    "y": { "type": "number", "description": "Where to zoom, down: 0 top, 0.4 face height (default), 1 bottom." },
                     "reason": { "type": "string", "description": "A few words on why, shown to Luke." },
                 })),
                 "required": ["from", "to", "reason"],
@@ -98,6 +100,29 @@ fn tools() -> Value {
                     "style": { "type": "string", "enum": ["bold", "clean"] },
                 },
                 "required": ["on"],
+            },
+        },
+        {
+            "name": "add_clip",
+            "description": "Put a clip you made onto the timeline. Use this only for things the other tools can't do, and only after Luke has said yes. Render the clip with ffmpeg (or python3) into the clips/ folder here: a replacement for source seconds start..end of the recording, the same length, with an audio track (copy the recording's audio for that span unless asked otherwise). It plays instead of the recording there and shows to Luke as your unreviewed clip on the Claude clips track; he can keep, move, trim or delete it. A clip overlapping one of yours replaces it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "file": { "type": "string", "description": "Path of the clip, relative to this folder, e.g. clips/paris.mp4." },
+                    "start": { "type": "number", "description": "Source second it starts replacing." },
+                    "end": { "type": "number", "description": "Source second it stops replacing." },
+                    "reason": { "type": "string", "description": "What it is, in a few words, shown to Luke, e.g. \"Paris behind you\"." },
+                },
+                "required": ["file", "start", "end", "reason"],
+            },
+        },
+        {
+            "name": "remove_clip",
+            "description": "Take your clips overlapping source seconds start..end off the timeline. The recording plays there again.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "start": { "type": "number" }, "end": { "type": "number" } },
+                "required": ["start", "end"],
             },
         },
         {
@@ -149,7 +174,11 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
                 let reason = args["reason"].as_str().filter(|r| !r.trim().is_empty()).ok_or("Give a short `reason`.")?;
                 let scale = args["scale"].as_f64().unwrap_or(1.3);
                 edits::zoom(&mut e, a, b, scale, reason.trim())?;
-                format!("Zoomed in on {a}-{b}: \"{}\" at {:.0}%.", text(a, b), scale.clamp(1.05, 2.0) * 100.0)
+                if let Some(z) = e.zooms.iter_mut().find(|z| z.first == a && z.by == "agent") {
+                    z.x = args["x"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0);
+                    z.y = args["y"].as_f64().unwrap_or(0.4).clamp(0.0, 1.0);
+                }
+                format!("Zoomed in on {a}-{b}: \"{}\" at {:.0}%.", text(a, b), scale.clamp(1.05, 2.5) * 100.0)
             } else {
                 let n = edits::unzoom(&mut e, a, b);
                 format!("Removed {n} zoom(s) around {a}-{b}.")
@@ -167,6 +196,45 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             edits::save(folder, &e)?;
             Ok(if on { format!("Captions are on, {style} style.") } else { "Captions are off.".into() })
         }
+        "add_clip" => {
+            let rel = args["file"].as_str().ok_or("Give the clip's `file`.")?;
+            let reason = args["reason"].as_str().filter(|r| !r.trim().is_empty()).ok_or("Give a short `reason`.")?;
+            let (start, end) = (args["start"].as_f64().ok_or("`start` must be seconds")?, args["end"].as_f64().ok_or("`end` must be seconds")?);
+            if !(0.0 <= start && start < end && end <= duration + 0.01) {
+                return Err(format!("`start` and `end` must be within the recording (0 to {duration:.2}s), start first."));
+            }
+            let base = folder.canonicalize().map_err(|e| e.to_string())?;
+            let path = base.join(rel).canonicalize().map_err(|_| format!("There's no file at {rel} in this folder."))?;
+            if !path.starts_with(&base) {
+                return Err("The clip has to be inside this folder (e.g. clips/name.mp4).".into());
+            }
+            let info = crate::media::probe(&path)?;
+            if info.width == 0 {
+                return Err(format!("{rel} has no video."));
+            }
+            if !info.audio {
+                return Err(format!("{rel} has no audio track. Add one (the recording's audio for {start:.2}-{end:.2}s, or silence)."));
+            }
+            if info.duration < end - start - 0.1 {
+                return Err(format!("{rel} is {:.2}s but needs to be {:.2}s to cover {start:.2}-{end:.2}s.", info.duration, end - start));
+            }
+            let rel = path.strip_prefix(&base).unwrap().to_string_lossy().to_string();
+            edits::add_clip(&mut e, &rel, start, end, info.duration, reason.trim());
+            edits::save(folder, &e)?;
+            Ok(format!("Added {rel} on the Claude clips track for {start:.2}-{end:.2}s. Luke will see it in blue until he reviews it."))
+        }
+        "remove_clip" => {
+            let (start, end) = (args["start"].as_f64().ok_or("`start` must be seconds")?, args["end"].as_f64().ok_or("`end` must be seconds")?);
+            let mut n = 0;
+            for c in e.clips.iter_mut() {
+                if c.by == "agent" && c.status.as_deref() != Some("restored") && c.start < end && c.end > start {
+                    c.status = Some("restored".into());
+                    n += 1;
+                }
+            }
+            edits::save(folder, &e)?;
+            Ok(format!("Took {n} clip(s) off the timeline."))
+        }
         other => Err(format!("No tool called {other}")),
     }
 }
@@ -178,12 +246,18 @@ fn clock(t: f64) -> String {
 /// The transcript as runs of kept and cut words, which reads well and keeps indexes exact.
 fn describe(words: &[edits::Word], e: &edits::Edits, duration: f64) -> String {
     let kinds = edits::kinds(words.len(), e);
-    let length = edits::kept_length(words, &kinds, duration);
+    let ranges = edits::kept_ranges(words, &kinds, duration);
+    let length: f64 = ranges.iter().map(|(a, b)| b - a).sum();
     let mut s = format!(
-        "The recording is {:.1}s; the cut is {length:.1}s. Each run below is [first-last] time, then its words.\n\
+        "The recording is {:.1}s; the cut is {length:.1}s. Each run below is [first-last] source time, then its words.\n\
+         Times Luke gives (like 00:12) are usually from the player, which shows the edit: match them to \"plays at\".\n\
          KEPT plays in the video. CUT runs say who cut them; yours stay unreviewed until Luke keeps or restores them.\n\n",
         duration
     );
+    if e.other.get("keepPauses").and_then(Value::as_bool) == Some(true) {
+        s += "No rough cut yet: every pause plays as recorded, and the cut is longer than the figure above. If Luke asks for a rough cut, \
+              tell him to click Rough cut at the top (it cuts fillers, retakes and long pauses), or make the cuts he describes.\n\n";
+    }
     let label = |k: Kind, i: usize| -> String {
         match k {
             Kind::Kept => "KEPT".into(),
@@ -204,7 +278,8 @@ fn describe(words: &[edits::Word], e: &edits::Edits, duration: f64) -> String {
             j += 1;
         }
         let text = words[i..=j].iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
-        s += &format!("[{i}-{j}] {} {head}: {text}\n", clock(words[i].start));
+        let plays = if k == Kind::Kept { format!(", plays at {} in the edit", clock(edits::cut_time(&ranges, words[i].start))) } else { String::new() };
+        s += &format!("[{i}-{j}] {} {head}: {text} (source {:.2}-{:.2}s{plays})\n", clock(words[i].start), words[i].start, words[j].end);
         i = j + 1;
     }
     let live: Vec<_> = e.zooms.iter().filter(|z| z.status.as_deref() != Some("restored")).collect();
@@ -222,6 +297,14 @@ fn describe(words: &[edits::Word], e: &edits::Edits, duration: f64) -> String {
         Some(c) if c.on => format!("Captions: on, {} style\n", c.style),
         _ => "Captions: off\n".into(),
     };
+    let clips: Vec<_> = e.clips.iter().filter(|c| c.status.as_deref() != Some("restored")).collect();
+    if !clips.is_empty() {
+        s += "Clips on the timeline (playing instead of the recording):\n";
+        for c in clips {
+            let who = if c.by == "agent" { format!("yours, {}", c.status.as_deref().unwrap_or("pending")) } else { "Luke's".into() };
+            s += &format!("{} {:.2}-{:.2}s ({who}) {}\n", c.file, c.start, c.end, c.reason.as_deref().unwrap_or(""));
+        }
+    }
     let restored: Vec<_> = e.agent.iter().filter(|c| c.status == "restored").collect();
     if !restored.is_empty() {
         s += "\nCuts of yours that Luke put back (don't cut these again unless he asks):\n";
@@ -258,7 +341,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 6);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 8);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");

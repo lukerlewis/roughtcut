@@ -58,9 +58,13 @@ export async function openRecording(path: string): Promise<Opened> {
   return invoke("open_recording", { path });
 }
 
-export async function runRoughCut(path: string): Promise<string> {
-  if (!inApp) return "/fixtures";
-  return invoke("run_rough_cut", { path });
+/** Transcribes the recording and, with `cut`, asks Claude for its rough cut. */
+export async function runRoughCut(path: string, cut: boolean): Promise<string> {
+  if (!inApp) {
+    await new Promise((r) => setTimeout(r, 300));
+    return "/fixtures";
+  }
+  return invoke("run_rough_cut", { path, cut });
 }
 
 export async function loadCut(folder: string): Promise<Loaded> {

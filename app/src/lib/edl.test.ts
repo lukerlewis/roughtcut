@@ -20,6 +20,11 @@ import {
   pendingCount,
   setZoomStatus,
   applyTrims,
+  removeZoom,
+  setZoomLook,
+  zoomBox,
+  zoomPointFor,
+  blocks,
   clearTrims,
   deleteClip,
   editRanges,
@@ -188,5 +193,39 @@ describe("timeline trims", () => {
     expect(zoomSpan(SAMPLE, e.zooms![0])).toEqual([1.33, 2.07]);
     expect([e.zooms![0].first, e.zooms![0].last]).toEqual([1, 5]);
     expect(e.zooms![0].status).toBe("accepted");
+  });
+});
+
+describe("word blocks", () => {
+  it("gives each word a block and long pauses their own", () => {
+    const words = [
+      { text: "good", start: 1.0, end: 1.3 },
+      { text: "morning", start: 1.32, end: 1.8 },
+      { text: "today", start: 2.6, end: 3.0 },
+    ];
+    const [lane] = blocks([[0.9, 3.15]], words);
+    expect(lane.map((b) => b.word)).toEqual([0, 1, null, 2]);
+    expect(lane[0].start).toBe(0.9);
+    expect(lane[0].end).toBeCloseTo(1.31);
+    expect(lane[2].start).toBeCloseTo(1.84);
+    expect(lane[2].end).toBeCloseTo(2.56);
+    expect(lane[3].end).toBe(3.15);
+    for (let i = 1; i < lane.length; i++) expect(lane[i].start).toBeCloseTo(lane[i - 1].end);
+  });
+});
+
+describe("effect settings", () => {
+  it("changes a zoom's amount and spot, and keeps Claude's", () => {
+    const e: Edits = { version: 1, agent: [], user: [], log: [], zooms: [{ first: 1, last: 2, scale: 1.3, x: 0.5, y: 0.4, by: "agent", status: "pending" }] };
+    const next = setZoomLook(e, 0, { scale: 1.6, x: 0.2 });
+    expect(next.zooms![0]).toMatchObject({ scale: 1.6, x: 0.2, y: 0.4, status: "accepted" });
+    expect(setZoomLook(next, 0, { scale: 1.6 })).toBe(next);
+    expect(removeZoom(next, 0).zooms![0].status).toBe("restored");
+  });
+
+  it("turns the framing box into a zoom point and back", () => {
+    const box = zoomBox({ scale: 2, x: 0.25, y: 1 });
+    expect(box).toEqual({ left: 0.125, top: 0.5, size: 0.5 });
+    expect(zoomPointFor(2, box.left, box.top)).toEqual({ x: 0.25, y: 1 });
   });
 });

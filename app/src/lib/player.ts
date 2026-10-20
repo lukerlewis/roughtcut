@@ -19,6 +19,7 @@ export class CutPlayer {
   private raf = 0;
   private ranges: [number, number][] = [];
   playing = false;
+  private quiet = false;
   onState: (s: PlayerState) => void = () => {};
 
   constructor(a: HTMLVideoElement, b: HTMLVideoElement) {
@@ -64,8 +65,15 @@ export class CutPlayer {
   private show() {
     this.videos.forEach((v, i) => {
       v.style.visibility = i === this.active ? "visible" : "hidden";
-      v.muted = i !== this.active;
+      v.muted = i !== this.active || this.quiet;
     });
+  }
+
+  /** Silences the recording while one of Claude's clips plays over it. */
+  setQuiet(quiet: boolean) {
+    if (quiet === this.quiet) return;
+    this.quiet = quiet;
+    this.show();
   }
 
   private emit() {

@@ -53,15 +53,17 @@ fn open_recording(path: String) -> Result<Opened, String> {
 }
 
 /// Runs `roughcut cut` on the recording, streaming its progress lines to the
-/// window as "roughcut-log" events.
+/// window as "roughcut-log" events. Without `cut` it only writes the words
+/// down, so the recording opens uncut.
 #[tauri::command]
-async fn run_rough_cut(app: AppHandle, path: String) -> Result<String, String> {
+async fn run_rough_cut(app: AppHandle, path: String, cut: bool) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let cli = tools::roughcut_cli().ok_or(
             "Can't find the roughcut command. Run the setup in your Roughcut folder first (bash scripts/setup-mac.sh).",
         )?;
         let mut child = tools::command(&cli)
             .args(["cut", &path, "--no-preview"])
+            .args(if cut { None } else { Some("--transcribe-only") })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

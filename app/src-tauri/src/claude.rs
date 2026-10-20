@@ -13,22 +13,36 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct Running(pub Mutex<Option<Child>>);
 
-pub const TOOLS: [&str; 6] = [
+pub const TOOLS: [&str; 8] = [
     "mcp__roughcut__get_edit",
     "mcp__roughcut__cut_words",
     "mcp__roughcut__restore_words",
     "mcp__roughcut__zoom_in",
     "mcp__roughcut__remove_zoom",
     "mcp__roughcut__set_captions",
+    "mcp__roughcut__add_clip",
+    "mcp__roughcut__remove_clip",
 ];
 
+/// Built-in tools for making clips: FFmpeg and Python to render them, and
+/// Read to look at a frame. Anything else Claude tries is refused.
+const MAKING: [&str; 6] = ["Bash(ffmpeg:*)", "Bash(ffprobe:*)", "Bash(python3:*)", "Bash(mkdir:*)", "Bash(ls:*)", "Read"];
+
 fn brief(recording: &str) -> String {
+    let name = Path::new(recording).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     format!(
         "You are Claude inside Roughcut, Luke's video editor, talking with him in the app's sidebar while he watches \
-         his video \"{recording}\". You can read and change the edit with the roughcut tools: call get_edit first, \
+         his video \"{name}\". You can read and change the edit with the roughcut tools: call get_edit first, \
          then cut or restore words, zoom in on words, or turn captions on, all by word index. Your cuts and zooms show to Luke in blue as unreviewed until he keeps or restores \
-         them, so make the change he asks for rather than describing it, and give each one a reason of a few words. You can't change the picture in other ways yet (backgrounds, text, \
-         music): say so plainly if asked. \
+         them, so make the change he asks for rather than describing it, and give each one a reason of a few words. \
+         Those edits stay fully adjustable by Luke, so always prefer them.\n\n\
+         For anything they can't do (a look or colour change, a background, text on screen, a speed change, an effect), you can make a new clip: \
+         render it with ffmpeg or python3 from the recording at \"{recording}\" into the clips/ folder here (mkdir -p clips), \
+         then put it on the timeline with add_clip. A clip replaces the recording over source seconds start..end: make it exactly that long, \
+         the same size and frame rate as the recording, with its audio for that span (unless asked otherwise), as H.264 MP4. \
+         Before making one, tell Luke in one sentence that this will be a new clip he can keep, move, trim or delete but not fine-tune afterwards, \
+         and end your turn; make it only after he says yes. Use the get_edit times to pick start and end. \
+         Never change or delete the recording or any file outside clips/. You can't add music yet: say so plainly if asked.\n\n\
          Don't re-cut anything he restored unless he asks. Luke isn't technical: reply in a sentence or two of plain \
          English, and give times like 00:12 so he can find things."
     )
@@ -51,9 +65,9 @@ pub fn ask(
     } } });
     let mut cmd = tools::command(&claude);
     cmd.current_dir(folder)
-        .args(["-p", "--model", "opus", "--output-format", "stream-json", "--verbose", "--tools", ""])
+        .args(["-p", "--model", "opus", "--output-format", "stream-json", "--verbose", "--tools", "Bash,Read"])
         .args(["--strict-mcp-config", "--mcp-config", &mcp.to_string()])
-        .args(["--allowedTools", &TOOLS.join(",")])
+        .args(["--allowedTools", &[&TOOLS[..], &MAKING[..]].concat().join(",")])
         .args(["--append-system-prompt", &brief(recording)]);
     if let Some(id) = resume {
         cmd.args(["--resume", id]);

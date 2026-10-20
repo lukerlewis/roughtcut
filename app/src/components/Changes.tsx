@@ -1,6 +1,6 @@
-import { Check, RotateCcw, Undo2, X, ZoomIn } from "lucide-react";
+import { Check, Film, RotateCcw, Undo2, X, ZoomIn } from "lucide-react";
 import { useEffect, useRef } from "react";
-import { timecode, type AgentCut, type Word, type Zoom } from "../lib/edl";
+import { timecode, wordAt, type AgentCut, type Clip, type Word, type Zoom } from "../lib/edl";
 
 interface Props {
   words: Word[];
@@ -16,9 +16,12 @@ interface Props {
   onZoomAccept: (i: number) => void;
   onZoomRemove: (i: number) => void;
   onZoomUndo: (i: number) => void;
+  clips: Clip[];
+  onClipFocus: (i: number) => void;
+  onClipStatus: (i: number, status: "pending" | "accepted" | "restored") => void;
 }
 
-type Item = { kind: "cut"; i: number; c: AgentCut } | { kind: "zoom"; i: number; z: Zoom };
+type Item = { kind: "cut"; i: number; c: AgentCut } | { kind: "zoom"; i: number; z: Zoom } | { kind: "clip"; i: number; m: Clip };
 
 /** Claude's changes as a change set: blue dot until reviewed. */
 export function Changes(p: Props) {
@@ -28,10 +31,12 @@ export function Changes(p: Props) {
     box.current?.querySelector(`[data-c="${p.focus}"]`)?.scrollIntoView({ block: "nearest" });
   }, [p.focus]);
 
+  const firstWord = (it: Item) => (it.kind === "cut" ? it.c.first : it.kind === "zoom" ? it.z.first : Math.max(0, wordAt(p.words, it.m.start)));
   const items: Item[] = [
     ...p.cuts.map((c, i) => ({ kind: "cut" as const, i, c })),
     ...p.zooms.flatMap((z, i) => (z.by === "agent" ? [{ kind: "zoom" as const, i, z }] : [])),
-  ].sort((a, b) => (a.kind === "cut" ? a.c.first : a.z.first) - (b.kind === "cut" ? b.c.first : b.z.first));
+    ...p.clips.flatMap((m, i) => (m.by === "agent" ? [{ kind: "clip" as const, i, m }] : [])),
+  ].sort((a, b) => firstWord(a) - firstWord(b));
 
   const text = (first: number, last: number) =>
     p.words
@@ -69,6 +74,36 @@ export function Changes(p: Props) {
                 )}
                 {c.status !== "pending" && (
                   <button className="btn ghost" onClick={(e) => (e.stopPropagation(), p.onUndo(i))}>
+                    <Undo2 size={14} /> Undo
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        }
+        if (it.kind === "clip") {
+          const { m, i } = it;
+          return (
+            <div key={`m${i}`} className={`change zoom ${m.status}`} onClick={() => p.onClipFocus(i)}>
+              <span className="dot" />
+              <div className="text">
+                <Film size={13} /> {m.reason || "New clip"}
+              </div>
+              <div className="why">{m.status === "restored" ? "Clip removed" : `New clip · ${(m.end - m.start).toFixed(1)}s · ${m.file}`}</div>
+              <div className="row">
+                <span className="mono">{timecode(m.start)}</span>
+                {m.status === "pending" && (
+                  <>
+                    <button className="btn" title="Take this clip out" onClick={(e) => (e.stopPropagation(), p.onClipStatus(i, "restored"))}>
+                      <X size={14} /> Remove
+                    </button>
+                    <button className="btn" title="Keep this clip" onClick={(e) => (e.stopPropagation(), p.onClipStatus(i, "accepted"))}>
+                      <Check size={14} /> Keep
+                    </button>
+                  </>
+                )}
+                {m.status !== "pending" && (
+                  <button className="btn ghost" onClick={(e) => (e.stopPropagation(), p.onClipStatus(i, "pending"))}>
                     <Undo2 size={14} /> Undo
                   </button>
                 )}

@@ -1,6 +1,8 @@
 import { Minus, Plus } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { cutDuration, cutToSource, sourceToCut, timecode, zoomSpan, type Word, type Zoom } from "../lib/edl";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { blocks as wordBlocks, cutDuration, cutToSource, sourceToCut, timecode, zoomSpan, type Block, type Clip, type Word, type Zoom } from "../lib/edl";
+
+export type Effect = { kind: "zoom" | "clip"; index: number };
 
 interface Props {
   ranges: [number, number][];
@@ -13,16 +15,23 @@ interface Props {
   words: Word[];
   zooms: Zoom[]; // all of them; removed ones are skipped
   onZoomEdit: (index: number, start: number, end: number) => void; // source seconds
+  clips: Clip[]; // Claude's clips, all of them; removed ones are skipped
+  onClipEdit: (index: number, start: number, end: number, offset: number) => void; // source seconds
+  onClipRemove: (index: number) => void;
   onTrim: (clip: number, start: number, end: number) => void; // source seconds
   onDeleteClip: (clip: number) => void;
+  effect: Effect | null; // the zoom or clip whose settings are showing
+  onSelectEffect: (effect: Effect | null) => void;
+  selection: { first: number; last: number } | null; // words selected (shared with the transcript)
+  onSelectWords: (first: number, last: number) => void; // ⌫ then cuts them, Z zooms
+  onCutPause: (start: number, end: number) => void; // source seconds
   onScrub: (t: number) => void;
   onScrubEnd?: () => void;
 }
 
 const RULER = 22;
-const ZOOM_TOP = 28; // the effects track, above the clips
-const ZOOM_H = 18;
-const LANE_TOP = 52;
+const TRACK_H = 18; // Claude's clips and the zooms each get a track this tall above the recording
+const CLIP_GAP = 26; // the Claude clips track, shown only when there are clips
 const LANE_H = 100;
 const EDGE = 6; // px from an end that grabs it
 const MIN = 0.1; // shortest clip or zoom, in seconds
@@ -30,9 +39,22 @@ const MIN = 0.1; // shortest clip or zoom, in seconds
 type Drag =
   | { mode: "scrub" }
   | { mode: "zoom-left" | "zoom-right" | "zoom-move"; index: number; a: number; b: number; x: number; span: [number, number] }
+  | { mode: "made-left" | "made-right" | "made-move"; index: number; a: number; b: number; x: number }
   | { mode: "trim-left" | "trim-right"; clip: number; a: number; b: number; x: number };
 
-type Preview = { kind: "zoom"; index: number; a: number; b: number } | { kind: "trim"; clip: number; a: number; b: number };
+type Preview =
+  | { kind: "zoom" | "made"; index: number; a: number; b: number }
+  | { kind: "trim"; clip: number; a: number; b: number };
+
+
+/** A small strip of film, marking a clip Claude made. */
+function film(g: CanvasRenderingContext2D, x: number, y: number) {
+  g.fillRect(x, y, 10, 1.5);
+  g.fillRect(x, y + 8.5, 10, 1.5);
+  g.fillRect(x, y, 1.5, 10);
+  g.fillRect(x + 8.5, y, 1.5, 10);
+  g.fillRect(x + 3, y + 3, 4, 4);
+}
 
 function css(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -64,12 +86,18 @@ export function Timeline(p: Props) {
     previewRef.current = v;
     setPreviewState(v);
   };
-  const [selected, setSelected] = useState<number | null>(null);
+  const selected = p.effect;
+  const [pause, setPause] = useState<Block | null>(null); // a pause block picked to delete
+  const hasClips = p.clips.some((c) => c.status !== "restored");
+  const CLIP_TOP = 28;
+  const ZOOM_TOP = 28 + (hasClips ? CLIP_GAP : 0);
+  const LANE_TOP = ZOOM_TOP + 24;
 
   // The clips as they'd be with the trim in progress.
   const ranges =
     preview?.kind === "trim" ? p.ranges.map((r, i) => (i === preview.clip ? ([preview.a, preview.b] as [number, number]) : r)) : p.ranges;
   const total = cutDuration(ranges);
+  const lanes = useMemo(() => wordBlocks(ranges, p.words), [ranges, p.words]);
 
   // Each live zoom as a block in cut time, with the drag in progress applied.
   const blocks = p.zooms.flatMap((z, index) => {
@@ -77,6 +105,13 @@ export function Timeline(p: Props) {
     if (preview?.kind === "zoom" && preview.index === index) return [{ index, z, a: preview.a, b: preview.b }];
     const [a, b] = zoomSpan(p.words, z);
     return [{ index, z, a: sourceToCut(ranges, a), b: sourceToCut(ranges, b) }];
+  });
+
+  // Each of Claude's live clips as a block in cut time.
+  const made = p.clips.flatMap((c, index) => {
+    if (c.status === "restored") return [];
+    if (preview?.kind === "made" && preview.index === index) return [{ index, c, a: preview.a, b: preview.b }];
+    return [{ index, c, a: sourceToCut(ranges, c.start), b: sourceToCut(ranges, c.end) }];
   });
 
   const pxPerSec = useCallback(
@@ -152,7 +187,8 @@ export function Timeline(p: Props) {
     g.strokeStyle = css("--border");
     g.stroke();
 
-    // Clips laid end to end, each with its words above its slice of the waveform.
+    // The recording's pieces laid end to end, split into a block per word
+    // (and per long pause), each word above its slice of the waveform.
     let acc = 0;
     ranges.forEach(([a, b], i) => {
       const x0 = x(acc);
@@ -160,16 +196,24 @@ export function Timeline(p: Props) {
       const start = acc;
       acc += b - a;
       if (x1 < 0 || x0 > w) return;
-      const cw = Math.max(1, x1 - x0 - 1);
-      g.fillStyle = clipFill;
-      g.beginPath();
-      g.roundRect(x0, LANE_TOP, cw, LANE_H, 4);
-      g.fill();
+      const at = (t: number) => x(start + (t - a));
+      for (const bl of lanes[i] ?? []) {
+        const bx0 = at(bl.start);
+        const bx1 = bl.end >= b - 1e-6 ? x1 - 2 : at(bl.end) - 1;
+        if (bx1 < 0 || bx0 > w) continue;
+        const bw = Math.max(1, bx1 - bx0);
+        g.globalAlpha = bl.word === null ? 0.55 : 1;
+        g.fillStyle = clipFill;
+        g.beginPath();
+        g.roundRect(bx0, LANE_TOP, bw, LANE_H, 3);
+        g.fill();
+        g.globalAlpha = 1;
+      }
       if (p.peaks) {
         g.fillStyle = waveFill;
         const mid = LANE_TOP + LANE_H * 0.64;
         const amp = LANE_H * 0.3;
-        for (let px = Math.max(0, Math.floor(x0)); px < Math.min(w, x1 - 1); px++) {
+        for (let px = Math.max(0, Math.floor(x0)); px < Math.min(w, x1 - 2); px++) {
           const s0 = a + (px - x0) / pps;
           const s1 = a + (px + 1 - x0) / pps;
           let peak = 0;
@@ -178,36 +222,40 @@ export function Timeline(p: Props) {
           g.fillRect(px, mid - hgt, 1, hgt * 2);
         }
       }
-      // The words, where there's room for them.
-      g.save();
-      g.beginPath();
-      g.rect(x0 + 4, LANE_TOP, cw - 8, LANE_H);
-      g.clip();
-      g.font = `12px ${sans}`;
-      g.fillStyle = css("--subtle-foreground");
-      let room = x0 + 6;
-      for (const word of p.words) {
-        const mid = (word.start + word.end) / 2;
-        if (mid < a || mid > b) continue;
-        const wx = Math.max(x(start + Math.max(0, word.start - a)), x0 + 6);
-        if (wx < room || wx > x1) continue;
-        g.fillText(word.text, wx, LANE_TOP + 18);
-        room = wx + g.measureText(word.text).width + 6;
-      }
-      g.restore();
-      if (i === selected) {
-        g.strokeStyle = css("--ink");
-        g.lineWidth = 2;
-        g.beginPath();
-        g.roundRect(x0 + 1, LANE_TOP + 1, cw - 2, LANE_H - 2, 4);
-        g.stroke();
+      for (const bl of lanes[i] ?? []) {
+        const bx0 = at(bl.start);
+        const bx1 = bl.end >= b - 1e-6 ? x1 - 2 : at(bl.end) - 1;
+        if (bx1 < 0 || bx0 > w) continue;
+        const bw = Math.max(1, bx1 - bx0);
+        // The word, where there's room for it.
+        if (bl.word !== null && bw > 14) {
+          g.save();
+          g.beginPath();
+          g.rect(bx0 + 4, LANE_TOP, bw - 6, LANE_H);
+          g.clip();
+          g.font = `12px ${sans}`;
+          g.fillStyle = css("--subtle-foreground");
+          g.fillText(p.words[bl.word].text, bx0 + 5, LANE_TOP + 18);
+          g.restore();
+        }
+        const chosen =
+          bl.word === null
+            ? pause !== null && Math.abs(pause.start - bl.start) < 1e-6
+            : p.selection !== null && bl.word >= p.selection.first && bl.word <= p.selection.last;
+        if (chosen) {
+          g.strokeStyle = css("--ink");
+          g.lineWidth = 2;
+          g.beginPath();
+          g.roundRect(bx0 + 1, LANE_TOP + 1, bw - 2, LANE_H - 2, 3);
+          g.stroke();
+        }
       }
       if (preview?.kind === "trim" && preview.clip === i) {
         g.fillStyle = css("--ink");
         g.fillRect(x0, LANE_TOP, 2, LANE_H);
-        g.fillRect(x1 - 3, LANE_TOP, 2, LANE_H);
+        g.fillRect(x1 - 4, LANE_TOP, 2, LANE_H);
       }
-      // Claude's unreviewed cut sits at the start of this clip: mark the join blue.
+      // Claude's unreviewed cut sits at the start of this piece: mark the join blue.
       if (i > 0 && p.claudeJoins.includes(i)) {
         g.fillStyle = css("--unread");
         g.fillRect(x0 - 1.5, LANE_TOP - 4, 2, LANE_H + 8);
@@ -221,19 +269,55 @@ export function Timeline(p: Props) {
 
     // Effects track: zooms as blocks, blue while Claude's and unreviewed.
     g.font = `500 10px ${mono}`;
-    for (const { z, a, b } of blocks) {
+    for (const { index, z, a, b } of blocks) {
       const x0 = x(a);
       const x1 = x(b);
       if (x1 < 0 || x0 > w) continue;
       const pending = z.status === "pending";
       g.fillStyle = pending ? css("--unread") : css("--stroke-strong");
       g.beginPath();
-      g.roundRect(x0, ZOOM_TOP, Math.max(4, x1 - x0 - 1), ZOOM_H, 4);
+      g.roundRect(x0, ZOOM_TOP, Math.max(4, x1 - x0 - 1), TRACK_H, 4);
       g.fill();
       g.fillStyle = pending ? "#fff" : css("--foreground");
-      g.fillRect(x0 + 2, ZOOM_TOP + 5, 2, ZOOM_H - 10);
-      g.fillRect(x1 - 5, ZOOM_TOP + 5, 2, ZOOM_H - 10);
+      g.fillRect(x0 + 2, ZOOM_TOP + 5, 2, TRACK_H - 10);
+      g.fillRect(x1 - 5, ZOOM_TOP + 5, 2, TRACK_H - 10);
       if (x1 - x0 > 70) g.fillText(`Zoom ${Math.round(z.scale * 100)}%`, x0 + 10, ZOOM_TOP + 12.5);
+      if (selected?.kind === "zoom" && selected.index === index) {
+        g.strokeStyle = css("--ink");
+        g.lineWidth = 2;
+        g.beginPath();
+        g.roundRect(x0 + 1, ZOOM_TOP + 1, Math.max(4, x1 - x0 - 1) - 2, TRACK_H - 2, 4);
+        g.stroke();
+      }
+    }
+
+    // Claude clips track: clips it made, blue until Luke keeps them.
+    g.font = `500 11px ${sans}`;
+    for (const { index, c, a, b } of made) {
+      const x0 = x(a);
+      const x1 = x(b);
+      if (x1 < 0 || x0 > w) continue;
+      const pending = c.status === "pending";
+      const bw = Math.max(4, x1 - x0 - 1);
+      g.fillStyle = pending ? css("--unread") : css("--stroke-strong");
+      g.beginPath();
+      g.roundRect(x0, CLIP_TOP, bw, TRACK_H, 4);
+      g.fill();
+      if (selected?.kind === "clip" && selected.index === index) {
+        g.strokeStyle = css("--ink");
+        g.lineWidth = 2;
+        g.beginPath();
+        g.roundRect(x0 + 1, CLIP_TOP + 1, bw - 2, TRACK_H - 2, 4);
+        g.stroke();
+      }
+      g.save();
+      g.beginPath();
+      g.rect(x0, CLIP_TOP, bw - 6, TRACK_H);
+      g.clip();
+      g.fillStyle = pending ? "#fff" : css("--foreground");
+      if (bw > 20) film(g, x0 + 6, CLIP_TOP + 4);
+      if (bw > 40) g.fillText(c.reason || c.file.split("/").pop() || "Clip", x0 + 21, CLIP_TOP + 13);
+      g.restore();
     }
 
     // Playhead.
@@ -261,7 +345,16 @@ export function Timeline(p: Props) {
     const y = clientY - r.top;
     const pps = pxPerSec(c.clientWidth);
     const px = (t: number) => r.left + 12 + (t - left) * pps;
-    if (y >= ZOOM_TOP - 2 && y <= ZOOM_TOP + ZOOM_H + 2) {
+    if (hasClips && y >= CLIP_TOP - 2 && y <= CLIP_TOP + TRACK_H + 2) {
+      for (const bl of made) {
+        const [x0, x1] = [px(bl.a), px(bl.b)];
+        if (clientX < x0 - EDGE || clientX > x1 + EDGE) continue;
+        const mode = Math.abs(clientX - x0) <= EDGE ? "made-left" : Math.abs(clientX - x1) <= EDGE ? "made-right" : "made-move";
+        return { mode, made: bl } as const;
+      }
+      return null;
+    }
+    if (y >= ZOOM_TOP - 2 && y <= ZOOM_TOP + TRACK_H + 2) {
       for (const bl of blocks) {
         const [x0, x1] = [px(bl.a), px(bl.b)];
         if (clientX < x0 - EDGE || clientX > x1 + EDGE) continue;
@@ -273,13 +366,18 @@ export function Timeline(p: Props) {
     if (y >= LANE_TOP && y <= LANE_TOP + LANE_H) {
       let acc = 0;
       for (let i = 0; i < ranges.length; i++) {
-        const len = ranges[i][1] - ranges[i][0];
-        const [x0, x1] = [px(acc), px(acc + len)];
-        acc += len;
-        // At a join, the side the pointer is on picks the clip.
+        const [a, b] = ranges[i];
+        const [x0, x1] = [px(acc), px(acc + b - a)];
+        const start = acc;
+        acc += b - a;
+        // At a join, the side the pointer is on picks the piece.
         if (clientX >= x0 && clientX < x0 + EDGE) return { mode: "trim-left", clip: i } as const;
         if (clientX > x1 - EDGE && clientX <= x1) return { mode: "trim-right", clip: i } as const;
-        if (clientX >= x0 && clientX <= x1) return { mode: "clip", clip: i } as const;
+        if (clientX >= x0 && clientX <= x1) {
+          const t = a + (clientX - r.left - 12) / pps + left - start;
+          const block = lanes[i]?.find((bl) => t >= bl.start && t <= bl.end) ?? null;
+          return { mode: "clip", clip: i, block } as const;
+        }
       }
     }
     return null;
@@ -291,7 +389,7 @@ export function Timeline(p: Props) {
       if (!d) return;
       if (d.mode === "scrub") return p.onScrub(timeAt(e.clientX));
       const dt = (e.clientX - d.x) / pxPerSec(canvas.current!.clientWidth);
-      if (d.mode === "trim-left" || d.mode === "trim-right") {
+      if ("clip" in d) {
         // Moving an end in or out of the source, rippling what follows.
         const prev = p.ranges[d.clip - 1]?.[1] ?? 0;
         const next = p.ranges[d.clip + 1]?.[0] ?? p.duration;
@@ -300,22 +398,41 @@ export function Timeline(p: Props) {
         return setPreview({ kind: "trim", clip: d.clip, a, b });
       }
       let { a, b } = d;
-      if (d.mode === "zoom-left") a = Math.max(0, Math.min(b - MIN, a + dt));
-      else if (d.mode === "zoom-right") b = Math.min(total, Math.max(a + MIN, b + dt));
+      const { index, mode } = d;
+      if (d.mode === "zoom-left" || d.mode === "made-left") a = Math.max(0, Math.min(b - MIN, a + dt));
+      else if (d.mode === "zoom-right" || d.mode === "made-right") b = Math.min(total, Math.max(a + MIN, b + dt));
       else {
         const shift = Math.max(-a, Math.min(total - b, dt));
         [a, b] = [a + shift, b + shift];
       }
-      if (d.mode === "zoom-left" || d.mode === "zoom-right" || d.mode === "zoom-move") setPreview({ kind: "zoom", index: d.index, a, b });
+      setPreview({ kind: mode.startsWith("made") ? "made" : "zoom", index, a, b });
     };
     const up = () => {
       const d = drag.current;
       drag.current = null;
       if (!d) return;
-      const preview = previewRef.current;
+      let preview = previewRef.current;
+      // A click without a drag changes nothing.
+      if (preview && d.mode !== "scrub" && Math.abs(preview.a - d.a) < 1e-6 && Math.abs(preview.b - d.b) < 1e-6) preview = null;
       if (d.mode === "scrub") p.onScrubEnd?.();
       else if (preview?.kind === "trim") p.onTrim(preview.clip, preview.a, preview.b);
-      else if (preview?.kind === "zoom" && d.mode !== "trim-left" && d.mode !== "trim-right") {
+      else if (preview?.kind === "made" && d.mode.startsWith("made")) {
+        // Back to source time. Moving keeps where in its file the clip plays
+        // from; trimming the left end moves that point with it. Neither end
+        // can go past the file's own start or end.
+        const c = p.clips[preview.index];
+        const fileStart = c.start - c.offset; // where the file's first frame would sit
+        const fileEnd = fileStart + c.length;
+        let start = cutToSource(p.ranges, preview.a).source;
+        let end = cutToSource(p.ranges, Math.max(0, preview.b - 1e-4)).source + 1e-4;
+        if (d.mode === "made-move") end = start + (c.end - c.start);
+        if (d.mode === "made-right") start = c.start;
+        if (d.mode === "made-left") end = c.end;
+        if (d.mode !== "made-move") [start, end] = [Math.max(start, fileStart), Math.min(end, fileEnd)];
+        const offset = d.mode === "made-move" ? c.offset : c.offset + (start - c.start);
+        p.onClipEdit(preview.index, start, end, offset);
+      }
+      else if (preview?.kind === "zoom" && d.mode.startsWith("zoom")) {
         // Back to source time, leaving an end that wasn't dragged where it was.
         // An end exactly at a join belongs to the clip before it.
         const start = d.mode === "zoom-right" ? d.span[0] : cutToSource(p.ranges, preview.a).source;
@@ -327,13 +444,16 @@ export function Timeline(p: Props) {
     // Select a clip, then ⌫ deletes it. Runs before the app's own keys.
     const key = (e: KeyboardEvent) => {
       const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
-      if (selected === null || typing || (e.key !== "Backspace" && e.key !== "Delete")) return;
+      if (pause === null || typing || (e.key !== "Backspace" && e.key !== "Delete")) return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      if (selected < p.ranges.length) p.onDeleteClip(selected);
-      setSelected(null);
+      p.onCutPause(pause.start, pause.end);
+      setPause(null);
     };
-    const down = (e: MouseEvent) => e.target !== canvas.current && setSelected(null);
+    const down = (e: MouseEvent) => {
+      if (e.target === canvas.current) return;
+      setPause(null);
+    };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
     window.addEventListener("keydown", key, true);
@@ -363,29 +483,45 @@ export function Timeline(p: Props) {
       </div>
       <canvas
         ref={canvas}
+        style={{ height: LANE_TOP + LANE_H + 20 }}
         onMouseDown={(e) => {
           const h = hit(e.clientX, e.clientY);
+          setPause(null);
+          if (h && (h.mode === "made-left" || h.mode === "made-right" || h.mode === "made-move")) {
+            const { index, a, b } = h.made;
+            drag.current = { mode: h.mode, index, a, b, x: e.clientX };
+            p.onSelectEffect({ kind: "clip", index });
+            setPreview({ kind: "made", index, a, b });
+            return;
+          }
           if (h && (h.mode === "zoom-left" || h.mode === "zoom-right" || h.mode === "zoom-move")) {
             const { index, a, b, z } = h.block;
             drag.current = { mode: h.mode, index, a, b, x: e.clientX, span: zoomSpan(p.words, z) };
+            p.onSelectEffect({ kind: "zoom", index });
             setPreview({ kind: "zoom", index, a, b });
             return;
           }
           if (h && (h.mode === "trim-left" || h.mode === "trim-right")) {
             const [a, b] = p.ranges[h.clip];
             drag.current = { mode: h.mode, clip: h.clip, a, b, x: e.clientX };
-            setSelected(null);
             setPreview({ kind: "trim", clip: h.clip, a, b });
             return;
           }
-          setSelected(h?.mode === "clip" ? h.clip : null);
+          p.onSelectEffect(null);
+          // Click a word to select it (shift-click to select up to another), or a pause.
+          if (h?.mode === "clip" && h.block) {
+            const bl = h.block;
+            if (bl.word === null) setPause(bl);
+            else if (e.shiftKey && p.selection) p.onSelectWords(Math.min(p.selection.first, bl.word), Math.max(p.selection.last, bl.word));
+            else p.onSelectWords(bl.word, bl.word);
+          }
           drag.current = { mode: "scrub" };
           p.onScrub(timeAt(e.clientX));
         }}
         onMouseMove={(e) => {
           if (drag.current) return;
           const h = hit(e.clientX, e.clientY);
-          e.currentTarget.style.cursor = !h || h.mode === "clip" ? "default" : h.mode === "zoom-move" ? "grab" : "ew-resize";
+          e.currentTarget.style.cursor = !h || h.mode === "clip" ? "default" : h.mode.endsWith("move") ? "grab" : "ew-resize";
         }}
         onWheel={(e) => {
           const c = canvas.current!;
