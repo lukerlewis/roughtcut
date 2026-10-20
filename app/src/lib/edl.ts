@@ -947,3 +947,50 @@ export function setVoice(e: Edits, voice: Voice): Edits {
   if (JSON.stringify(voice) === JSON.stringify(e.voice ?? {})) return e;
   return { ...e, voice, log: [...e.log, { at: now(), by: "you", op: "voice", note: JSON.stringify(voice) }] };
 }
+
+// --- Verbal markers --------------------------------------------------------
+
+/** What Luke says while filming to mark a bad take. The loose ones ("again")
+ *  only count when said on their own, between pauses. (As markers.rs.) */
+const CUES: { words: string[]; loose: boolean }[] = [
+  "cut that", "cut this", "scratch that", "let me redo that", "let me redo this", "let me do that again", "let me try that again",
+  "let me say that again", "let me start again", "let me start over", "start again", "from the top", "take two", "one more time", "again",
+].map((c) => ({ words: c.split(" "), loose: ["again", "start again", "from the top", "take two", "one more time"].includes(c) }));
+
+const bare = (t: string) => t.toLowerCase().replace(/[^a-z']/g, "");
+const ends = (t: string) => /[.?!]$/.test(t.trim());
+
+/** The bad takes Luke marked by saying "cut that" (and the like): each cut
+ *  runs from the start of the take before the cue through the cue itself. */
+export function findRetakes(words: Word[]): { first: number; last: number; reason: string }[] {
+  const found: { first: number; last: number; reason: string }[] = [];
+  let floor = 0; // never reach back past the last marked take
+  for (let c = 0; c < words.length; c++) {
+    const cue = CUES.find((q) => q.words.every((w, k) => c + k < words.length && bare(words[c + k].text) === w));
+    if (!cue) continue;
+    const end = c + cue.words.length - 1;
+    const [before, after] = [c > 0 ? words[c].start - words[c - 1].end : 9, end + 1 < words.length ? words[end + 1].start - words[end].end : 9];
+    const [needBefore, needAfter] = cue.loose ? [0.6, 0.6] : [0.3, 0.4];
+    const okBefore = before >= needBefore || (!cue.loose && c > 0 && /[.,?!]$/.test(words[c - 1].text));
+    const okAfter = after >= needAfter || (!cue.loose && ends(words[end].text));
+    if (!okBefore || !okAfter) continue;
+    let first = c;
+    if (c > floor) {
+      first = c - 1;
+      while (first > floor && c - first < 40 && !ends(words[first - 1].text) && words[first].start - words[first - 1].end < 0.8) first--;
+    }
+    found.push({ first, last: end, reason: `You said "${cue.words.join(" ")}"` });
+    floor = end + 1;
+    c = end;
+  }
+  return found;
+}
+
+/** Marks those takes as cuts to review (in blue), leaving alone any that
+ *  overlap a cut already there. */
+export function addRetakeCuts(e: Edits, words: Word[]): { edits: Edits; added: number } {
+  const fresh = findRetakes(words).filter((r) => !e.agent.some((c) => c.first <= r.last && c.last >= r.first) && !e.user.some((s) => s.first <= r.first && s.last >= r.last));
+  if (!fresh.length) return { edits: e, added: 0 };
+  const agent = [...e.agent, ...fresh.map((r) => ({ ...r, status: "pending" as const }))].sort((a, b) => a.first - b.first);
+  return { edits: { ...e, agent, log: [...e.log, { at: now(), by: "you", op: "retakes", note: `${fresh.length}` }] }, added: fresh.length };
+}

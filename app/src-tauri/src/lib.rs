@@ -5,6 +5,7 @@
 
 mod claude;
 mod edits;
+mod markers;
 mod mcp;
 mod matte;
 mod media;

@@ -1,4 +1,4 @@
-import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, EyeOff, Gauge, LayoutPanelLeft, MessageSquarePlus, MousePointerClick, Mic, Plus, User, ZoomIn, Scissors, SkipBack, Type } from "lucide-react";
+import { Captions as CaptionsIcon, Download, FolderOpen, Pause, Play, Circle, EyeOff, Gauge, LayoutPanelLeft, MessageSquarePlus, MessageSquareX, MousePointerClick, Mic, Plus, User, ZoomIn, Scissors, SkipBack, Type } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Changes } from "./components/Changes";
 import { Chat } from "./components/Chat";
@@ -21,6 +21,7 @@ import {
   addRendered,
   rerender,
   addClickZooms,
+  addRetakeCuts,
   type Rendered,
   addSpeed,
   addBlur,
@@ -289,12 +290,22 @@ export default function App() {
     try {
       await backend.runRoughCut(project.source, true);
       const loaded = await backend.loadCut(project.folder);
-      change((x) => applyRoughCut(x, loaded.decisions));
+      change((x) => addRetakeCuts(applyRoughCut(x, loaded.decisions), words).edits);
       setTab("changes");
       setCutting(null);
     } catch (e) {
       setCutting((c) => ({ log: c?.log ?? [], error: String(e) }));
     }
+  };
+
+  // Takes Luke marked while filming by saying "cut that", as cuts to review.
+  const cutRetakes = () => {
+    if (!edits) return;
+    const r = addRetakeCuts(edits, words);
+    if (!r.added) return setNotice("No marked takes found. While filming, say \u201ccut that\u201d after a bad take.");
+    change(() => r.edits);
+    setTab("changes");
+    setNotice(`Found ${r.added} marked take${r.added === 1 ? "" : "s"}. They're in blue for you to review.`);
   };
 
   // --- Playback ------------------------------------------------------------
@@ -481,6 +492,11 @@ export default function App() {
   // Background swap: rendered on the Mac by a small helper, then played as a clip.
   const [rendering, setRendering] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(t);
+  }, [notice]);
   const renderKind = useRef<"layout" | "background">("background");
   useEffect(() => {
     const off = backend.listen<number>("background-progress", (p) => setRendering(p));
@@ -633,12 +649,16 @@ export default function App() {
 
   // --- Keyboard ------------------------------------------------------------
 
+  const shuttle = useRef(1);
+
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (phase.kind !== "ready" || exporting) return;
       const mod = e.metaKey || e.ctrlKey;
+      if (e.target instanceof HTMLElement && e.target.closest("input[type=text], input:not([type]), textarea, [contenteditable]")) return;
       if (e.key === " ") {
         e.preventDefault();
+        shuttle.current = 1;
         player.current?.toggle();
       } else if ((e.key === "Backspace" || e.key === "Delete") && effect && !selection) {
         e.preventDefault();
@@ -658,9 +678,29 @@ export default function App() {
       } else if (!mod && e.key.toLowerCase() === "g") {
         e.preventDefault();
         newBackground();
-      } else if (!mod && e.key.toLowerCase() === "l") {
+      } else if (!mod && e.key.toLowerCase() === "v") {
         e.preventDefault();
         newLayout();
+      } else if (!mod && ["j", "k", "l"].includes(e.key.toLowerCase())) {
+        // Final Cut's shuttle: L plays (again for faster), J backwards, K stops.
+        e.preventDefault();
+        const k = e.key.toLowerCase();
+        const was = state.playing ? shuttle.current : 0;
+        const rate = k === "k" ? 0 : k === "l" ? (was > 0 ? Math.min(8, was * 2) : 1) : was < 0 ? Math.max(-8, was * 2) : -1;
+        shuttle.current = rate;
+        player.current?.shuttleTo(rate);
+      } else if (!mod && (e.key.toLowerCase() === "i" || e.key.toLowerCase() === "o") && current >= 0) {
+        // Mark the selection's start (I) or end (O) at the word playing.
+        e.preventDefault();
+        const [a, b] = selection ? [selection.first, selection.last] : [current, current];
+        setSelection(e.key.toLowerCase() === "i" ? { first: current, last: Math.max(current, b) } : { first: Math.min(a, current), last: current });
+      } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        // Jump to the previous or next edit point.
+        e.preventDefault();
+        const points = ranges.map((r) => sourceToCut(ranges, r[0]));
+        const t = state.time;
+        const to = e.key === "ArrowUp" ? [...points].reverse().find((p) => p < t - 0.05) ?? 0 : points.find((p) => p > t + 0.05);
+        if (to !== undefined) player.current?.seek(to);
       } else if (!mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
         newTimed("blur");
@@ -767,9 +807,18 @@ export default function App() {
         <span className="sub">{saved > 0 ? `${Math.round((saved / project.info.duration) * 100)}% shorter` : ""}</span>
         <span className="spacer" data-tauri-drag-region />
         <Updates />
-        <button className="btn ghost" onClick={roughCut} disabled={!!cutting} title="Claude suggests cuts (fillers, retakes, long pauses) for you to review">
-          <Scissors size={16} /> <span className="lbl">Rough cut</span>
-        </button>
+        <Menu
+          label={
+            <>
+              <Scissors size={16} /> <span className="lbl">Rough cut</span>
+            </>
+          }
+          title="Cuts for you to review"
+          items={[
+            { label: "Claude's rough cut", icon: <Scissors size={14} />, disabled: !!cutting, onClick: roughCut },
+            { label: "Takes I marked (\u201ccut that\u201d)", icon: <MessageSquareX size={14} />, onClick: cutRetakes },
+          ]}
+        />
         <Menu
           label={
             <>
@@ -784,7 +833,7 @@ export default function App() {
             { label: "Speed-up", icon: <Gauge size={14} />, key: "S", onClick: () => newTimed("speed") },
             { label: "Blur", icon: <EyeOff size={14} />, key: "B", onClick: () => newTimed("blur") },
             { label: "Background", icon: <User size={14} />, key: "G", onClick: newBackground },
-            { label: "Layout", icon: <LayoutPanelLeft size={14} />, key: "L", disabled: !parts?.camera?.video, onClick: newLayout },
+            { label: "Layout", icon: <LayoutPanelLeft size={14} />, key: "V", disabled: !parts?.camera?.video, onClick: newLayout },
             { label: "Zoom to my clicks", icon: <MousePointerClick size={14} />, disabled: !parts?.clicks.length, onClick: zoomToClicks },
           ]}
         />
@@ -826,7 +875,7 @@ export default function App() {
       <div className="main">
         <div className="panel">
           <div className="panel-head">
-            Transcript <span className="meta">Select words, then ⌫ cut, Z zoom, S speed up, B blur, G background, L layout.</span>
+            Transcript <span className="meta">Select words, then ⌫ cut, Z zoom, S speed up, B blur, G background. J K L to play.</span>
           </div>
           <Transcript
             words={words}

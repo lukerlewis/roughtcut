@@ -44,6 +44,8 @@ import {
   removeTimed,
   setNote,
   openNotes,
+  findRetakes,
+  addRetakeCuts,
   type Edits,
   type Word,
 } from "./edl";
@@ -316,5 +318,34 @@ describe("recordings made in Roughcut", () => {
     e = addRendered(e, "l1.mp4", 2, 5, { layout: { mode: "camera" } });
     e = addRendered(e, "l2.mp4", 4, 6, { layout: { mode: "side" } });
     expect(e.clips!.map((c) => [c.file, c.status ?? ""])).toEqual([["c.mp4", "restored"], ["l2.mp4", ""]]);
+  });
+});
+
+describe("verbal markers", () => {
+  // "Hello there. This is the wrong bit, (pause) cut that. (pause) This is the right bit. Let's do it again tomorrow."
+  const words = w([
+    ["Hello", 0, 0.3], ["there.", 0.3, 0.6],
+    ["This", 0.8, 1.0], ["is", 1.0, 1.1], ["the", 1.1, 1.2], ["wrong", 1.2, 1.5], ["bit,", 1.5, 1.8],
+    ["cut", 2.6, 2.8], ["that.", 2.8, 3.0],
+    ["This", 4.0, 4.2], ["is", 4.2, 4.3], ["the", 4.3, 4.4], ["right", 4.4, 4.7], ["bit.", 4.7, 5.0],
+    ["Let's", 5.2, 5.4], ["do", 5.4, 5.5], ["it", 5.5, 5.6], ["again", 5.6, 5.9], ["tomorrow.", 5.9, 6.3],
+    ["Again.", 7.5, 7.8],
+  ]);
+  it("cuts the take before a cue, back to the sentence start", () => {
+    const found = findRetakes(words);
+    expect(found[0]).toEqual({ first: 2, last: 8, reason: 'You said "cut that"' });
+  });
+  it("only counts a loose cue said on its own", () => {
+    const found = findRetakes(words);
+    expect(found).toHaveLength(2);
+    expect(found[1].last).toBe(19); // the lone "Again." after a pause, not "do it again tomorrow"
+    expect(found[1].first).toBe(14);
+  });
+  it("adds them as cuts to review, once", () => {
+    const e: Edits = { version: 1, agent: [], user: [], log: [] };
+    const { edits, added } = addRetakeCuts(e, words);
+    expect(added).toBe(2);
+    expect(edits.agent.every((c) => c.status === "pending")).toBe(true);
+    expect(addRetakeCuts(edits, words).added).toBe(0);
   });
 });

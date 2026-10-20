@@ -220,6 +220,11 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": { "scale": { "type": "number", "description": "1.2 to 2.5, default 1.6" } } },
         },
         {
+            "name": "cut_retakes",
+            "description": "Cut the takes Luke marked while filming by saying \"cut that\", \"scratch that\", \"let me redo that\" or a lone \"again\": each cut runs from the start of the bad take through the cue. Shows to Luke as your unreviewed cuts. Leaves alone anything already cut or restored.",
+            "inputSchema": { "type": "object", "properties": {} },
+        },
+        {
             "name": "remove_text",
             "description": "Take your text overlapping words from..to off the screen.",
             "inputSchema": { "type": "object", "properties": range(json!({})), "required": ["from", "to"] },
@@ -418,6 +423,19 @@ fn call(folder: &Path, duration: f64, name: &str, args: &Value) -> Result<String
             }
             edits::save(folder, &e)?;
             Ok(format!("Set the {mode} layout over {a}-{b}. Luke will see it in blue until he reviews it."))
+        }
+        "cut_retakes" => {
+            let mut added = vec![];
+            for (first, last, reason) in crate::markers::find(&words) {
+                if e.agent.iter().any(|c| c.first <= last && c.last >= first) || e.user.iter().any(|s| s.first <= first && s.last >= last) {
+                    continue;
+                }
+                edits::cut(&mut e, first, last, &reason);
+                added.push(format!("{first}-{last} \"{}\"", text(first, last)));
+            }
+            e.agent.sort_by_key(|c| c.first);
+            edits::save(folder, &e)?;
+            Ok(if added.is_empty() { "Found no marked takes to cut.".into() } else { format!("Cut {} marked take(s): {}", added.len(), added.join("; ")) })
         }
         "zoom_to_clicks" => {
             let recording = std::env::var("ROUGHCUT_RECORDING").map_err(|_| "This only works from inside Roughcut.".to_string())?;
@@ -670,7 +688,7 @@ mod tests {
     #[test]
     fn reads_and_changes_the_edit() {
         let dir = folder();
-        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 20);
+        assert_eq!(rpc(&dir, "tools/list", json!({}))["tools"].as_array().unwrap().len(), 21);
         let edit = rpc(&dir, "tools/call", json!({ "name": "get_edit", "arguments": {} }));
         let text = edit["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("[1-1] 00:00 CUT by you (unreviewed: filler): um"), "{text}");

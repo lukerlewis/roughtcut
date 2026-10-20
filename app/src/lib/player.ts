@@ -20,6 +20,8 @@ export class CutPlayer {
   private ranges: Range[] = [];
   playing = false;
   private quiet = false;
+  private shuttle = 1; // J/K/L: how many times normal speed
+  private reverse = 0;
   onState: (s: PlayerState) => void = () => {};
 
   constructor(a: HTMLVideoElement, b: HTMLVideoElement) {
@@ -84,8 +86,8 @@ export class CutPlayer {
     const next = this.ranges[this.index + 1];
     if (next && Math.abs(this.back.currentTime - next[0]) > 0.01) this.back.currentTime = next[0];
     // Sped-up ranges play faster; the browser keeps the voice's pitch.
-    this.front.playbackRate = this.ranges[this.index]?.[2] || 1;
-    if (next) this.back.playbackRate = next[2] || 1;
+    this.front.playbackRate = (this.ranges[this.index]?.[2] || 1) * this.shuttle;
+    if (next) this.back.playbackRate = (next[2] || 1) * this.shuttle;
   }
 
   /** Jump to a point in the cut. */
@@ -107,7 +109,12 @@ export class CutPlayer {
     if (!this.playing) this.emit();
   }
 
-  play() {
+  play(rate = 1) {
+    this.stopReverse();
+    if (this.shuttle !== rate) {
+      this.shuttle = rate;
+      this.cue();
+    }
     if (!this.ranges.length || this.playing) return;
     if (this.time >= this.duration - 0.05) this.seek(0);
     const [a, b] = this.ranges[this.index];
@@ -120,6 +127,7 @@ export class CutPlayer {
   }
 
   pause() {
+    this.stopReverse();
     this.playing = false;
     cancelAnimationFrame(this.raf);
     this.videos.forEach((v) => v.pause());
@@ -129,6 +137,28 @@ export class CutPlayer {
   toggle() {
     if (this.playing) this.pause();
     else this.play();
+  }
+
+  /** J/K/L shuttle: forward at `rate` times speed, backwards when it's
+   *  negative (stepping back through the cut, since video can't play in
+   *  reverse), or stopped at 0. */
+  shuttleTo(rate: number) {
+    if (rate > 0) return this.play(rate);
+    this.pause();
+    if (rate === 0) return;
+    let last = performance.now();
+    const step = (now: number) => {
+      const t = this.time + ((now - last) / 1000) * rate;
+      last = now;
+      this.seek(Math.max(0, t));
+      this.reverse = t > 0 ? requestAnimationFrame(step) : 0;
+    };
+    this.reverse = requestAnimationFrame(step);
+  }
+
+  private stopReverse() {
+    if (this.reverse) cancelAnimationFrame(this.reverse);
+    this.reverse = 0;
   }
 
   private tick = () => {

@@ -98,6 +98,12 @@ function Action({ m, words, onSeekWord }: { m: ChatMessage; words: Word[]; onSee
         </span>
       </div>
     );
+  if (m.tool === "cut_retakes")
+    return (
+      <div className="action quiet">
+        <Scissors size={13} /> Cut the takes you marked
+      </div>
+    );
   if (m.tool === "zoom_to_clicks")
     return (
       <div className="action quiet">
