@@ -1,0 +1,106 @@
+name: Mac app
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths: ["app/**", "roughcut/**", "tests/**", ".github/workflows/mac-app.yml"]
+  workflow_dispatch:
+
+# One build at a time per branch; a newer push replaces any build still waiting.
+concurrency:
+  group: mac-app-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg espeak-ng
+      - run: pip install -e .[dev] numpy
+      - run: pytest -q
+
+  build:
+    # GitHub's Apple-silicon machines were often too busy to pick builds up, so
+    # this builds on an Intel Mac for Apple silicon (the helpers are universal).
+    runs-on: macos-15-intel
+    env:
+      BUNDLE: src-tauri/target/aarch64-apple-darwin/release/bundle
+    permissions:
+      contents: write # to publish each build as a private release for the app's updater
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - run: brew install ffmpeg
+      - run: npm ci
+      - run: npm test
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      # Sets up HyperFrames' renderer as the app does on Luke's first export, and renders a graphic.
+      # Not blocking: it downloads from npm, so a network hiccup shouldn't stop a build.
+      - name: Check motion graphics render on a Mac
+        continue-on-error: true
+        timeout-minutes: 15
+        run: ROUGHCUT_HYPERFRAMES="$RUNNER_TEMP/hyperframes" cargo test --manifest-path src-tauri/Cargo.toml renders_a_graphic -- --ignored --nocapture
+      # Small native helpers (background swap, recorder), copied into the app next to Roughcut.
+      - name: Build the native helpers
+        run: |
+          swift build -c release --package-path helpers --arch arm64 --arch x86_64
+          # Built on Intel they come out unsigned; sign them (ad hoc) like the app.
+          codesign --force -s - helpers/.build/apple/Products/Release/roughcut-matte helpers/.build/apple/Products/Release/roughcut-recorder
+      - name: Check the background swap works
+        run: |
+          ffmpeg -v error -f lavfi -i testsrc2=size=640x360:rate=30 -f lavfi -i sine=frequency=440 -t 2 -c:v libx264 -pix_fmt yuv420p -c:a aac -y "$RUNNER_TEMP/in.mp4"
+          helpers/.build/apple/Products/Release/roughcut-matte "$RUNNER_TEMP/in.mp4" 0.5 1.5 "$RUNNER_TEMP/out.mp4" color:#00ff88
+          ffprobe -v error -show_entries stream=codec_type,duration -of csv=p=0 "$RUNNER_TEMP/out.mp4" | tee "$RUNNER_TEMP/streams.txt"
+          grep -q '^video,' "$RUNNER_TEMP/streams.txt" && grep -q '^audio,' "$RUNNER_TEMP/streams.txt"
+          awk -F, '{ if ($2 < 0.9 || $2 > 1.1) exit 1 }' "$RUNNER_TEMP/streams.txt"
+      # Only the zipped app: the updater uses it, and making a disk image fails at random on GitHub's Macs.
+      # The build number is the version's last part, so the app can tell when a newer build exists.
+      - run: npx tauri build --target aarch64-apple-darwin --bundles app --config '{"version":"0.1.${{ github.run_number }}","bundle":{"macOS":{"files":{"MacOS/roughcut-matte":"../helpers/.build/apple/Products/Release/roughcut-matte","MacOS/roughcut-recorder":"../helpers/.build/apple/Products/Release/roughcut-recorder"}}}}'
+      - name: Check the helpers are in the app
+        run: |
+          test -x $BUNDLE/macos/Roughcut.app/Contents/MacOS/roughcut-matte
+          test -x $BUNDLE/macos/Roughcut.app/Contents/MacOS/roughcut-recorder
+          /usr/libexec/PlistBuddy -c "Print :NSCameraUsageDescription" $BUNDLE/macos/Roughcut.app/Contents/Info.plist
+          test -f $BUNDLE/macos/Roughcut.app/Contents/Resources/graphics/catalog.json
+          test -f $BUNDLE/macos/Roughcut.app/Contents/Resources/graphics/GUIDE.md
+          test -f $BUNDLE/macos/Roughcut.app/Contents/Resources/graphics/lib/hyperframes-runtime.js
+          for f in Roughcut roughcut-matte roughcut-recorder; do lipo -archs "$BUNDLE/macos/Roughcut.app/Contents/MacOS/$f" | grep -q arm64; done
+      # Ad-hoc signed, so macOS offers "Open Anyway" instead of calling a download "damaged".
+      - name: Check the app is signed
+        run: codesign --verify --deep --strict --verbose=2 $BUNDLE/macos/Roughcut.app
+      - name: Zip the app
+        run: |
+          cd "$BUNDLE/macos"
+          ditto -c -k --keepParent Roughcut.app Roughcut.zip
+      # Roughcut's "Update" button installs the latest release (see src-tauri/src/update.rs).
+      - name: Publish the build
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" \
+            $BUNDLE/macos/Roughcut.zip \
+            --title "Build ${{ github.run_number }}" --notes "$(git log -1 --pretty=%s)" --target "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Roughcut-mac
+          path: |
+            app/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Roughcut.zip
+          retention-days: 30

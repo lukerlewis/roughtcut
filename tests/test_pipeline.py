@@ -217,3 +217,18 @@ def test_normal_words_are_left_alone(tmp_path):
     words = words_from([("Most", 0.2, 0.5), ("people", 0.5, 0.85), ("think", 0.85, 1.2)])
     out, fixed, found = hesitations.refine(words, hesitations.analyse(wav))
     assert out == words and fixed == found == 0
+
+
+def test_transcribe_only_cuts_nothing(tmp_path):
+    sys.path.insert(0, str(Path(__file__).parent))
+    import synth
+
+    video = synth.build(tmp_path / "talk.mp4")
+    from roughcut.cli import main
+
+    out = tmp_path / "out"
+    rc = main(["cut", str(video), "--transcript", str(video.with_suffix(".transcript.json")), "--transcribe-only", "--out", str(out)])
+    assert rc == 0
+    assert (out / "words.json").exists()
+    assert json.loads((out / "decisions.json").read_text())["cuts"] == []
+    assert not (out / "cut.fcpxml").exists()

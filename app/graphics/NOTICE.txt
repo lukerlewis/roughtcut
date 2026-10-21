@@ -1,0 +1,4 @@
+The graphics in this folder and lib/hyperframes-runtime.js are from HyperFrames (https://github.com/heygen-com/hyperframes, commit 434ad8c41c6fd86b4341c52cc6e751f40474f13f),
+Copyright HeyGen, licensed under the Apache License 2.0 (LICENSE-hyperframes.txt). Changed only to load GSAP from lib/.
+lib/gsap.min.js is GSAP (https://gsap.com), under its standard no-charge licence (https://gsap.com/standard-license).
+Fonts in */assets/fonts keep their own licences (OFL), included beside them.

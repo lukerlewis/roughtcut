@@ -8,7 +8,9 @@ The UI follows `DESIGN.md`: LukeOS's look (grey scale, Geist, Lucide, two meanin
 
 ## Current phase
 
-Phase 0: the command-line rough cut in `roughcut/` (see `docs/phase0.md`). Don't scaffold the Tauri app or add dependencies unless asked. `docs/planning.md` is a snapshot of the living planning doc; the decisions table there is the source of truth.
+The editor (roadmap phase 2, picked ahead of the recorder): a Tauri app in `app/` for reviewing and fixing Claude's rough cut. It runs the command-line rough cut in `roughcut/` (see `docs/phase0.md`) and reads its output folder. Keep dependencies few; ask before adding any big one. `docs/planning.md` is a snapshot of the living planning doc; the decisions table there is the source of truth.
+
+The Mac app is built by GitHub Actions (`.github/workflows/mac-app.yml`); Luke installs it from there, so he never needs developer tools. In `app/`, `npm run dev` serves the UI against fixtures in `public/fixtures` (not committed) for working without the app; `npm test` and `cargo test` must pass.
 
 The Python package has no required dependencies; speech models are optional extras. Run `pytest` before pushing.
 

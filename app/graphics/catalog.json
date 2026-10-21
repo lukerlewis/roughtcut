@@ -1,0 +1,614 @@
+{
+ "source": "https://github.com/heygen-com/hyperframes/tree/434ad8c41c6fd86b4341c52cc6e751f40474f13f/registry/blocks",
+ "graphics": [
+  {
+   "name": "lt-clean-bar",
+   "title": "Lower Third — Clean Bar",
+   "description": "Minimal white-card lower third for podcasts/interviews: accent tab, name + role, clip-wipe entrance",
+   "group": "Lower thirds",
+   "duration": 4.8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "lt-dark-card",
+   "title": "Lower Third — Dark Card",
+   "description": "Charcoal card lower third for bright footage: name, drawn accent underline, role; slide-up entrance",
+   "group": "Lower thirds",
+   "duration": 4.8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "lt-soft-pill",
+   "title": "Lower Third — Soft Pill",
+   "description": "Rounded white pill lower third for podcasts/interviews: status dot, name + role, scale-pop entrance",
+   "group": "Lower thirds",
+   "duration": 4.8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "lt-mask-reveal",
+   "title": "Lower Third — Mask Reveal",
+   "description": "Cardless lower third: an accent sweep crosses and clip-path-reveals a heavy name, role fades up; for footage",
+   "group": "Lower thirds",
+   "duration": 4.8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "lt-accent-underline",
+   "title": "Lower Third — Accent Underline",
+   "description": "Cardless lower third for footage overlay: name rises, an accent rule draws left-to-right, role fades in; text-shadowed for legibility",
+   "group": "Lower thirds",
+   "duration": 4.8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "lt-kicker-name",
+   "title": "Lower Third — Kicker Name",
+   "description": "Cardless lower third with an accent eyebrow/kicker tag, heavy name, and a drawn baseline; for footage",
+   "group": "Lower thirds",
+   "duration": 4.8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "lt-side-rule",
+   "title": "Lower Third — Side Rule",
+   "description": "Cardless lower third with a vertical accent bar; condensed display name + mono role, text-shadowed for footage",
+   "group": "Lower thirds",
+   "duration": 4.8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "lt-bold-block",
+   "title": "Lower Third — Bold Block",
+   "description": "High-energy podcast lower third: solid dark block wipes in, uppercase name slams up, accent tag pops",
+   "group": "Lower thirds",
+   "duration": 4.8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "lt-color-block",
+   "title": "Lower Third — Color Block",
+   "description": "High-energy lower third: bold accent-color block slides in with overshoot, condensed name + mono role",
+   "group": "Lower thirds",
+   "duration": 4.8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "lt-stack-bars",
+   "title": "Lower Third — Stack Bars",
+   "description": "Two stacked bars: a dark name bar wipes from the left, an accent role bar wipes from the right",
+   "group": "Lower thirds",
+   "duration": 4.8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "lower-third-bild",
+   "title": "Lower Third — BILD Style",
+   "description": "News-style lower third with tight-fit text boxes: white headline bar with red drop-shadow, red sub-line with white drop-shadow.",
+   "group": "Lower thirds",
+   "duration": 8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "yt-lower-third",
+   "title": "YouTube Lower Third",
+   "description": "Animated YouTube subscribe lower third with avatar and channel info",
+   "group": "Lower thirds",
+   "duration": 4.5,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/yt-lower-third.png"
+  },
+  {
+   "name": "news-ticker",
+   "title": "News Ticker",
+   "description": "Premium broadcast-style lower-third ticker with live label, headline ribbon, and scrolling news crawl.",
+   "group": "Lower thirds",
+   "duration": 7,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "yt-prism-title",
+   "title": "Chromatic Fringe Title",
+   "description": "Display title on a transparent root: blur-focus entrance, red/blue fringe that settles then breathes, perspective bow, slow scale drift",
+   "group": "Titles",
+   "duration": 6,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "yt-logo-intro",
+   "title": "Logo Intro Sequence",
+   "description": "Logo stamp pops on a lined board, a kicker line gives way to the title with an accent arrow chip; seeded line distortion",
+   "group": "Titles",
+   "duration": 6,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "hw-title",
+   "title": "Handwritten Title",
+   "description": "Handwritten display text with a scalar-driven word-by-word highlight sweep and a seeded squiggle underline sized to the text; boils",
+   "group": "Titles",
+   "duration": 6,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "hw-write-title",
+   "title": "Handwritten Write-On Title",
+   "description": "True glyph write-on: filled Caveat letterforms revealed by baked per-glyph centerline strokes traced in real stroke order with a curvature-adaptive pen-velocity ease (fast on straights, slow into curves, inter-stroke pen lifts); optional squiggle underline; boils",
+   "group": "Titles",
+   "duration": 6,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "weight-wave",
+   "title": "Weight Wave",
+   "description": "A crest of thickness travels along a headline: each character swells from light to black and leans forward as the wave passes, driven by the wght and slnt variable-font axes rather than by transforms.",
+   "group": "Titles",
+   "duration": 6,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "logo-outro",
+   "title": "Logo Outro",
+   "description": "Cinematic logo reveal with piece-by-piece assembly, glow bloom, tagline fade-in, and URL pill",
+   "group": "Titles",
+   "duration": 6,
+   "width": 1920,
+   "height": 1080,
+   "params": [
+    {
+     "key": "--bg-color",
+     "label": "Background",
+     "type": "color",
+     "default": "#0a0a0f"
+    },
+    {
+     "key": "--accent-color",
+     "label": "Accent",
+     "type": "color",
+     "default": "#1a1a1f"
+    }
+   ],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/logo-outro.png"
+  },
+  {
+   "name": "mk-progress-stat",
+   "title": "Count-Up Stat Card",
+   "description": "Big-numeral statistic with count-up, label, thin progress track filling to value/max, and caption; light and dark schemes",
+   "group": "Numbers and charts",
+   "duration": 7,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "mk-line-graph",
+   "title": "Minimal Line Graph",
+   "description": "One or two SVG series draw on with dots popping and value labels riding the draw front; dim baseline axis, x-labels, color-dot legend",
+   "group": "Numbers and charts",
+   "duration": 7,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "data-chart",
+   "title": "Data Chart",
+   "description": "Animated bar + line chart with staggered reveal, NYT-style typography, and value labels",
+   "group": "Numbers and charts",
+   "duration": 15,
+   "width": 1920,
+   "height": 1080,
+   "params": [
+    {
+     "key": "--bg-color",
+     "label": "Background",
+     "type": "color",
+     "default": "#faf9f6"
+    },
+    {
+     "key": "--text-color",
+     "label": "Text color",
+     "type": "color",
+     "default": "#333333"
+    }
+   ],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/data-chart.png"
+  },
+  {
+   "name": "bar-chart-race",
+   "title": "Bar Chart Race",
+   "description": "Ranked bars grow and overtake each other as a time series advances, with the axis rescaling as values climb and the accent handing over to whoever leads",
+   "group": "Numbers and charts",
+   "duration": 12,
+   "width": 1920,
+   "height": 1080,
+   "params": [
+    {
+     "key": "title",
+     "label": "Title",
+     "type": "text",
+     "default": "Streaming Subscribers by Service"
+    },
+    {
+     "key": "subtitle",
+     "label": "Subtitle",
+     "type": "text",
+     "default": "Ranked by reported subscribers"
+    },
+    {
+     "key": "periods",
+     "label": "Period labels (comma separated)",
+     "type": "text",
+     "default": "2019, 2020, 2021, 2022, 2023, 2024"
+    },
+    {
+     "key": "series",
+     "label": "Series (one per line: Name: v1, v2, ...)",
+     "type": "text",
+     "default": "Northwind: 42, 58, 71, 96, 118, 131\nCobalt: 30, 46, 68, 92, 126, 168\nFerry: 55, 62, 66, 70, 74, 79\nMarlow: 18, 33, 52, 61, 88, 104\nAster: 25, 28, 44, 58, 63, 72\nPell: 12, 20, 39, 47, 55, 90\nQuill: 8, 11, 15, 24, 40, 66\nDunmore: 35, 37, 38, 40, 42, 44"
+    },
+    {
+     "key": "barCount",
+     "label": "Bars shown",
+     "type": "number",
+     "default": "6",
+     "min": 3,
+     "max": 12,
+     "step": 1
+    },
+    {
+     "key": "periodDuration",
+     "label": "Seconds per period",
+     "type": "number",
+     "default": "2",
+     "min": 0.4,
+     "max": 6,
+     "step": 0.1
+    },
+    {
+     "key": "valuePrefix",
+     "label": "Value prefix",
+     "type": "text",
+     "default": "$"
+    },
+    {
+     "key": "valueSuffix",
+     "label": "Value suffix",
+     "type": "text",
+     "default": "M"
+    },
+    {
+     "key": "valueDecimals",
+     "label": "Value decimals",
+     "type": "number",
+     "default": "0",
+     "min": 0,
+     "max": 3,
+     "step": 1
+    },
+    {
+     "key": "accent",
+     "label": "Leader accent",
+     "type": "color",
+     "default": "#c8452d"
+    }
+   ]
+  },
+  {
+   "name": "split-flap-board",
+   "title": "Split-Flap Board",
+   "description": "Solari-style departure board: every cell walks its drum forward through the intervening characters of a fixed alphabet until it lands on its target, so the text resolves as a mechanical cascade instead of a fade.",
+   "group": "Numbers and charts",
+   "duration": 3.5,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "mk-specs-list",
+   "title": "Specs Checklist",
+   "description": "Left-aligned specs/traits checklist over footage or a board: rows slide in staggered with an accent underline sweep; light and dark schemes",
+   "group": "Lists and diagrams",
+   "duration": 8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "mk-callout-highlight",
+   "title": "Word-Sweep Highlight",
+   "description": "A sentence whose word-by-word emphasis is driven by a single scalar — tween it to sync the highlight with a voiceover",
+   "group": "Lists and diagrams",
+   "duration": 8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "flowchart",
+   "title": "Flowchart",
+   "description": "Animated decision tree with SVG connectors, sticky-note nodes, cursor interaction, and typing correction",
+   "group": "Lists and diagrams",
+   "duration": 12,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/flowchart.png"
+  },
+  {
+   "name": "hw-pipeline",
+   "title": "Hand-Drawn Flowchart",
+   "description": "Wobbled boxes with handwritten labels joined by curved connectors, drawing on in sequence from a node list",
+   "group": "Lists and diagrams",
+   "duration": 7,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "hw-text-cloud",
+   "title": "Speech Bubble",
+   "description": "Hand-drawn speech bubble with a positionable tail: outline draws on, paper fill fades in, handwritten text types per character; boils",
+   "group": "Lists and diagrams",
+   "duration": 6,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "code-typing",
+   "title": "Code Typing",
+   "description": "Token-streamed typing reveal with a caret that tracks the frontier — deterministic, no CSS animation.",
+   "group": "Code",
+   "duration": 5,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/code-typing.png"
+  },
+  {
+   "name": "code-diff",
+   "title": "Code Diff",
+   "description": "An edit shown as a colored diff — removed lines collapse in red, added lines expand in green.",
+   "group": "Code",
+   "duration": 6,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/code-diff.png"
+  },
+  {
+   "name": "code-highlight",
+   "title": "Code Highlight Sweep",
+   "description": "A highlight band sweeps across a target line while the surrounding context dims — draws the eye to one line.",
+   "group": "Code",
+   "duration": 5,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/code-highlight.png"
+  },
+  {
+   "name": "code-scroll",
+   "title": "Code Scroll To Line",
+   "description": "The camera scrolls a long file to bring a target line to center and spotlights it — for walking through real modules.",
+   "group": "Code",
+   "duration": 6,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/code-scroll.png"
+  },
+  {
+   "name": "x-post",
+   "title": "X Post Card",
+   "description": "Animated X/Twitter post card overlay with engagement metrics",
+   "group": "Social and apps",
+   "duration": 5,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/x-post.png"
+  },
+  {
+   "name": "reddit-post",
+   "title": "Reddit Post Card",
+   "description": "Animated Reddit post card overlay with upvotes and comments",
+   "group": "Social and apps",
+   "duration": 5,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/reddit-post.png"
+  },
+  {
+   "name": "yt-comment-card",
+   "title": "Comment Cards",
+   "description": "Social comments typing on over footage: avatar pop, username and time, per-character typewriter, likes row; image avatars or initials chips",
+   "group": "Social and apps",
+   "duration": 8,
+   "width": 1920,
+   "height": 1080,
+   "params": []
+  },
+  {
+   "name": "macos-notification",
+   "title": "macOS Notification",
+   "description": "Animated macOS-style notification banner with app icon and message",
+   "group": "Social and apps",
+   "duration": 5,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/macos-notification.png"
+  },
+  {
+   "name": "notification-cascade",
+   "title": "Notification Cascade",
+   "description": "Phone notifications land one after another and stack up the screen, each banner pushing the pile down as it arrives, before the whole stack lifts away into a closing card",
+   "group": "Social and apps",
+   "duration": 14,
+   "width": 1080,
+   "height": 1920,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes/templates/promoted/254fe4bd8a3f00c1e70ac5e38a1bce25060f7590/notification-cascade/poster.jpg"
+  },
+  {
+   "name": "instagram-follow",
+   "title": "Instagram Follow",
+   "description": "Animated Instagram follow overlay with profile card and follow button",
+   "group": "Social and apps",
+   "duration": 4.5,
+   "width": 1080,
+   "height": 1920,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/instagram-follow.png"
+  },
+  {
+   "name": "tiktok-follow",
+   "title": "TikTok Follow",
+   "description": "Animated TikTok follow overlay with profile card and follow button",
+   "group": "Social and apps",
+   "duration": 4.5,
+   "width": 1080,
+   "height": 1920,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/tiktok-follow.png"
+  },
+  {
+   "name": "spotify-card",
+   "title": "Spotify Now Playing",
+   "description": "Animated Spotify now-playing card with album art and progress bar",
+   "group": "Social and apps",
+   "duration": 5,
+   "width": 1080,
+   "height": 1920,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/spotify-card.png"
+  },
+  {
+   "name": "claude-exchange",
+   "title": "Claude Exchange",
+   "description": "A portrait Claude-style exchange types a prompt, works through search and reasoning steps, then streams a detailed answer with citations and actions",
+   "group": "Social and apps",
+   "duration": 21.4,
+   "width": 1080,
+   "height": 1920,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes/templates/promoted/254fe4bd8a3f00c1e70ac5e38a1bce25060f7590/claude-exchange/poster.jpg"
+  },
+  {
+   "name": "chatgpt-exchange",
+   "title": "ChatGPT Exchange",
+   "description": "A portrait ChatGPT-style exchange types and sends a prompt, streams an answer, assembles a comparison table, and scrolls back through the result",
+   "group": "Social and apps",
+   "duration": 14.9,
+   "width": 1080,
+   "height": 1920,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes/templates/promoted/254fe4bd8a3f00c1e70ac5e38a1bce25060f7590/chatgpt-exchange/poster.jpg"
+  },
+  {
+   "name": "ai-chat-reveal",
+   "title": "AI Chat Reveal",
+   "description": "A question is typed on a rising keyboard, sent, and answered by an AI that streams its reply word by word on a measured token rhythm - thinking dot, uneven bursts, bulleted list - before the app cuts to a branded closing card",
+   "group": "Social and apps",
+   "duration": 19.3333,
+   "width": 1080,
+   "height": 1920,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes/templates/promoted/254fe4bd8a3f00c1e70ac5e38a1bce25060f7590/ai-chat-reveal/poster.jpg"
+  },
+  {
+   "name": "snow",
+   "title": "Snow",
+   "description": "Seek-safe falling-snow overlay: sparse or dense flakes drift down with size, speed and opacity correlated per flake for depth, radial-masked so the frame center stays clear",
+   "group": "Overlays",
+   "duration": 6,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/snow.png"
+  },
+  {
+   "name": "starfield",
+   "title": "Starfield",
+   "description": "Seek-safe night-sky overlay: sparse or dense stars in three size tiers that twinkle and drift in two parallax layers, radial-masked to keep the frame center clear",
+   "group": "Overlays",
+   "duration": 6,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/starfield.png"
+  },
+  {
+   "name": "camcorder-hud",
+   "title": "Camcorder HUD",
+   "description": "Responsive REC, battery, editable date placeholder, and timeline-driven counter overlay for creator-camera and camcorder treatments",
+   "group": "Overlays",
+   "duration": 4,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/camcorder-hud.png"
+  },
+  {
+   "name": "editorial-flash-overlay",
+   "title": "Editorial Flash Overlay",
+   "description": "Finite neutral-warm light layers for a seek-safe camera-flash cut or social reveal",
+   "group": "Overlays",
+   "duration": 4,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/editorial-flash-overlay.png"
+  },
+  {
+   "name": "organic-light-leak-overlay",
+   "title": "Organic Light Leak Overlay",
+   "description": "Finite CSS light-leak overlay for memory beats and motivated transitions",
+   "group": "Overlays",
+   "duration": 4,
+   "width": 1920,
+   "height": 1080,
+   "params": [],
+   "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/organic-light-leak-overlay.png"
+  }
+ ]
+}

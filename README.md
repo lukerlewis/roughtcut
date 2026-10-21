@@ -2,7 +2,7 @@
 
 A personal, AI-native video editor for macOS. Drop in a talking-head or screen-share recording and Claude makes the first 80 to 90% of the cut; you finish it on a Final Cut-style timeline or by editing the transcript.
 
-**Status:** Phase 0. A command-line rough cut exists ([how to run and test it](docs/phase0.md)); no app yet.
+**Status:** A command-line rough cut works ([how to run and test it](docs/phase0.md)). The first version of the editor app, for reviewing Claude's cut, is in `app/`.
 
 ## The idea
 
