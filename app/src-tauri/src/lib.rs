@@ -595,7 +595,7 @@ fn reveal(path: String) -> Result<(), String> {
 async fn check_update(app: tauri::AppHandle) -> Result<Value, String> {
     let current = update::build_number(&app.package_info().version.to_string());
     let found = tauri::async_runtime::spawn_blocking(move || update::check(current)).await.map_err(|e| e.to_string())??;
-    Ok(serde_json::json!({ "keySet": update::key().is_some(), "current": current, "available": found }))
+    Ok(serde_json::json!({ "keySet": true, "current": current, "available": found }))
 }
 
 #[tauri::command]

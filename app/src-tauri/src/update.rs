@@ -1,6 +1,7 @@
-//! Updates from Luke's private GitHub repo. Every CI build is published as a
-//! release named `build-<n>` with the app zipped. Roughcut asks GitHub for the
-//! latest one with a read-only key Luke keeps in his Keychain, downloads it
+//! Updates from Luke's GitHub repo. Every CI build is published as a release
+//! named `build-<n>` with the app zipped. Roughcut asks GitHub for the latest
+//! one (the repo is public now; a read-only key Luke keeps in his Keychain is
+//! used if there is one, from when it was private), downloads it
 //! itself and swaps the app in place. Files an app downloads for itself
 //! aren't quarantined, so macOS opens the new build without a warning.
 //! Everything goes through the Mac's own `curl`, `ditto` and `security`.
@@ -65,11 +66,23 @@ pub fn set_key(key: &str) -> Result<(), String> {
     ok.success().then_some(()).ok_or_else(|| "Couldn't save the key in your Keychain.".into())
 }
 
-/// Calls GitHub with the key, which goes to curl on stdin rather than on its
-/// command line. With `save_to`, downloads a release asset there instead.
+/// Calls GitHub with Luke's key if he has one, else without; a key GitHub
+/// turns down is skipped, since the repo is public.
+fn get(url: &str, save_to: Option<&Path>) -> Result<Vec<u8>, String> {
+    match key() {
+        Some(k) => api(&k, url, save_to).or_else(|e| if e.contains("key") { api("", url, save_to) } else { Err(e) }),
+        None => api("", url, save_to),
+    }
+}
+
+/// Calls GitHub, with the key (if any) going to curl on stdin rather than on
+/// its command line. With `save_to`, downloads a release asset there instead.
 fn api(key: &str, url: &str, save_to: Option<&Path>) -> Result<Vec<u8>, String> {
     let mut cmd = tools::command("curl");
-    cmd.args(["-sSL", "--fail-with-body", "--max-time", "600", "-H", "@-", "-H", "X-GitHub-Api-Version: 2022-11-28"]);
+    cmd.args(["-sSL", "--fail-with-body", "--max-time", "600", "-H", "X-GitHub-Api-Version: 2022-11-28"]);
+    if !key.is_empty() {
+        cmd.args(["-H", "@-"]);
+    }
     match save_to {
         Some(path) => cmd.args(["-H", "Accept: application/octet-stream", "-o"]).arg(path),
         None => cmd.args(["-H", "Accept: application/vnd.github+json"]),
@@ -81,7 +94,11 @@ fn api(key: &str, url: &str, save_to: Option<&Path>) -> Result<Vec<u8>, String> 
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Couldn't run curl: {e}"))?;
-    child.stdin.take().unwrap().write_all(format!("Authorization: Bearer {key}\n").as_bytes()).map_err(|e| e.to_string())?;
+    let mut stdin = child.stdin.take().unwrap();
+    if !key.is_empty() {
+        stdin.write_all(format!("Authorization: Bearer {key}\n").as_bytes()).map_err(|e| e.to_string())?;
+    }
+    drop(stdin);
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if out.status.success() {
         return Ok(out.stdout);
@@ -98,8 +115,7 @@ fn api(key: &str, url: &str, save_to: Option<&Path>) -> Result<Vec<u8>, String> 
 }
 
 pub fn check(current: u64) -> Result<Option<Available>, String> {
-    let Some(key) = key() else { return Ok(None) };
-    let json = api(&key, &format!("https://api.github.com/repos/{REPO}/releases/latest"), None)?;
+    let json = get(&format!("https://api.github.com/repos/{REPO}/releases/latest"), None)?;
     let release: Value = serde_json::from_slice(&json).map_err(|e| e.to_string())?;
     Ok(newer(&release, current))
 }
@@ -113,13 +129,12 @@ pub fn bundle() -> Option<PathBuf> {
 
 /// Downloads the build and puts it where this app is. The caller restarts.
 pub fn install(update: &Available) -> Result<PathBuf, String> {
-    let key = key().ok_or("Paste your GitHub key first.")?;
     let target = bundle().ok_or("Roughcut can only update itself when it's opened from its .app.")?;
     let tmp = std::env::temp_dir().join(format!("roughcut-update-{}", update.build));
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let zip = tmp.join(ASSET);
-    api(&key, &update.asset, Some(&zip))?;
+    get(&update.asset, Some(&zip))?;
     let ok = tools::command("ditto").args(["-x", "-k"]).arg(&zip).arg(&tmp).status().map_err(|e| e.to_string())?;
     if !ok.success() {
         return Err("The download wasn't a complete app. Try again.".into());
