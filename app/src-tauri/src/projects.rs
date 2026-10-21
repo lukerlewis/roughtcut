@@ -101,8 +101,17 @@ pub fn delete(source: &str) -> Result<(), String> {
     forget(source)
 }
 
-#[cfg(target_os = "macos")]
 fn trash(path: &Path) -> Result<(), String> {
+    // Tests put things in a folder of their own instead.
+    if let Some(bin) = std::env::var_os("ROUGHCUT_TRASH").map(PathBuf::from) {
+        fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
+        return fs::rename(path, bin.join(path.file_name().unwrap_or_default())).map_err(|e| e.to_string());
+    }
+    to_trash(path)
+}
+
+#[cfg(target_os = "macos")]
+fn to_trash(path: &Path) -> Result<(), String> {
     // Foundation's own "move to Trash" (as Finder does it, with Put Back),
     // run through osascript so the app needs nothing extra.
     const SCRIPT: &str = "function run(argv) { ObjC.import('Foundation');         const ok = $.NSFileManager.defaultManager.trashItemAtURLResultingItemURLError($.NSURL.fileURLWithPath(argv[0]), null, null);         if (!ok) throw new Error('not moved'); }";
@@ -115,10 +124,8 @@ fn trash(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn trash(path: &Path) -> Result<(), String> {
-    let bin = std::env::var_os("ROUGHCUT_TRASH").map(PathBuf::from).ok_or("No Trash here.")?;
-    fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
-    fs::rename(path, bin.join(path.file_name().unwrap_or_default())).map_err(|e| e.to_string())
+fn to_trash(path: &Path) -> Result<(), String> {
+    Err(format!("Can't move {} to the Trash here.", path.display()))
 }
 
 /// A still from near the start of the recording, for the project's card.
